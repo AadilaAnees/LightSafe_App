@@ -114,14 +114,11 @@ export default function HomeScreen({ navigation }) {
         {/* Top Header */}
       <View style={styles.header}>
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          {/* 📍 COMPACT HEADER LOGO ADDED HERE */}
-          <LightSafeLogo size={42} showText={false} />
-          
-          <View style={{ marginLeft: 10 }}>
-            <Text style={styles.greeting}>Hi Hiruni,</Text>
-            <Text style={styles.welcomeText}>Welcome Back!</Text>
-          </View>
-        </View>
+  <View style={{ marginLeft: 0 }}>
+    <Text style={styles.greeting}>Hi Hiruni,</Text>
+    <Text style={styles.welcomeText}>Welcome Back!</Text>
+  </View>
+</View>
 
           <TouchableOpacity 
           style={[styles.bellBtn, helperData && styles.bellBtnActive]}
