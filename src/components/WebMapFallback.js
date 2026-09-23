@@ -1,32 +1,61 @@
 /**
  * WebMapFallback.js
  * -----------------
- * Premium, Uber-style interactive map for LightSafe Web.
- * Uses Leaflet with sleek CartoDB Voyager tiles, an animated pulsating live GPS dot,
- * smooth recentering, and real-time markers.
+ * Clean, watermark-free interactive map for LightSafe Web.
+ * Uses official OpenStreetMap tiles (no API key / watermark),
+ * real-time GPS tracking with allow="geolocation", and smooth focus on Sister's location.
  */
 
-import React, { useMemo } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text } from 'react-native';
+import React, { useMemo, useRef, useEffect } from 'react';
+import { View, StyleSheet, Text, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function WebMapFallback({
   userCoords,
   helperCoords,
+  focusCoords,
   requests = [],
+  onLocationDetected,
   style,
 }) {
-  const fallbackCoords = { latitude: 6.9271, longitude: 79.8612 };
-  const effectiveCoords = userCoords || fallbackCoords;
-  const isEstimated = !userCoords;
+  const iframeRef = useRef(null);
 
-  const lat = effectiveCoords.latitude;
-  const lng = effectiveCoords.longitude;
+  // If focusCoords provided (e.g. assisting a sister), focus on her.
+  // Otherwise use userCoords, or fallback if GPS still pending.
+  const activeLat = focusCoords?.latitude ?? userCoords?.latitude ?? 6.9271;
+  const activeLng = focusCoords?.longitude ?? userCoords?.longitude ?? 79.8612;
+  const isPendingGps = !userCoords && !focusCoords;
 
-  // Prepare nearby emergency markers for Leaflet injection
+  // Listen to GPS messages from inside Leaflet iframe
+  useEffect(() => {
+    const handleMsg = (e) => {
+      if (e.data && e.data.type === 'LIGHTSAFE_GPS_FOUND') {
+        if (onLocationDetected && e.data.coords) {
+          onLocationDetected(e.data.coords);
+        }
+      }
+    };
+    window.addEventListener('message', handleMsg);
+    return () => window.removeEventListener('message', handleMsg);
+  }, [onLocationDetected]);
+
+  // When userCoords changes in parent, inform Leaflet
+  useEffect(() => {
+    if (userCoords && iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage(
+        {
+          type: 'SET_USER_COORDS',
+          lat: userCoords.latitude,
+          lng: userCoords.longitude,
+        },
+        '*'
+      );
+    }
+  }, [userCoords]);
+
   const requestsJson = JSON.stringify(
     requests
-      .filter((r) => r.location && r.location.latitude && r.location.longitude)
+      .filter((r) => r.location?.latitude && r.location?.longitude)
       .map((r) => ({
         id: r.id,
         lat: r.location.latitude,
@@ -36,14 +65,13 @@ export default function WebMapFallback({
       }))
   );
 
-  const helperJson = helperCoords
+  const sisterPinJson = focusCoords
     ? JSON.stringify({
-        lat: helperCoords.latitude,
-        lng: helperCoords.longitude,
+        lat: focusCoords.latitude,
+        lng: focusCoords.longitude,
       })
     : 'null';
 
-  // Construct self-contained, high-performance HTML with Leaflet and clean styling
   const mapHtml = useMemo(() => {
     return `<!DOCTYPE html>
 <html>
@@ -56,12 +84,12 @@ export default function WebMapFallback({
     * { box-sizing: border-box; }
     html, body, #map {
       margin: 0; padding: 0; width: 100%; height: 100%;
-      background: #f1f5f9;
+      background: #e2e8f0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       overflow: hidden;
     }
 
-    /* Uber-style pulsating blue dot */
+    /* Pulsating Live User Dot */
     .user-pulse-marker {
       position: relative;
       width: 24px;
@@ -74,14 +102,14 @@ export default function WebMapFallback({
       background: #2563EB;
       border: 3px solid #FFFFFF;
       border-radius: 50%;
-      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.45);
+      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.5);
       z-index: 2;
     }
     .pulse-ring {
       position: absolute;
       top: -4px; left: -4px;
       width: 32px; height: 32px;
-      background: rgba(37, 99, 235, 0.28);
+      background: rgba(37, 99, 235, 0.35);
       border-radius: 50%;
       animation: pulse-wave 2.2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
       z-index: 1;
@@ -91,25 +119,30 @@ export default function WebMapFallback({
       100% { transform: scale(1.9); opacity: 0; }
     }
 
-    /* Red emergency marker */
-    .emergency-pin {
+    /* Sister emergency target marker */
+    .sister-target-marker {
       background: #D44D5C;
       color: white;
-      border: 2px solid white;
-      border-radius: 12px;
-      padding: 4px 8px;
-      font-size: 11px;
-      font-weight: 700;
-      box-shadow: 0 3px 8px rgba(212, 77, 92, 0.4);
+      border: 3px solid white;
+      border-radius: 20px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: bold;
+      box-shadow: 0 4px 12px rgba(212, 77, 92, 0.5);
       display: inline-flex;
       align-items: center;
+      animation: bounce 1.5s infinite;
       white-space: nowrap;
     }
+    @keyframes bounce {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-6px); }
+    }
 
-    /* Floating Recenter Action Button */
+    /* Recenter Button */
     .recenter-btn {
       position: absolute;
-      bottom: 16px;
+      bottom: 18px;
       right: 14px;
       z-index: 1000;
       background: white;
@@ -117,29 +150,23 @@ export default function WebMapFallback({
       width: 44px;
       height: 44px;
       border-radius: 50%;
-      box-shadow: 0 4px 14px rgba(0,0,0,0.18);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.22);
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
       outline: none;
-      transition: transform 0.15s ease;
     }
-    .recenter-btn:active {
-      transform: scale(0.92);
-    }
+    .recenter-btn:active { transform: scale(0.92); }
 
-    /* Minimalist Leaflet Overrides */
     .leaflet-control-attribution { display: none !important; }
-    .leaflet-bar { border: none !important; box-shadow: 0 2px 8px rgba(0,0,0,0.12) !important; border-radius: 8px !important; }
-    .leaflet-bar a { border-radius: 8px !important; border-bottom: 1px solid #f1f5f9 !important; }
   </style>
 </head>
 <body>
   <div id="map"></div>
 
-  <button class="recenter-btn" onclick="recenter()" title="Recenter to my location">
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2.3">
+  <button class="recenter-btn" onclick="triggerGpsLocate()" title="Locate Me">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2.4">
       <circle cx="12" cy="12" r="7"/>
       <line x1="12" y1="1" x2="12" y2="4"/>
       <line x1="12" y1="20" x2="12" y2="23"/>
@@ -150,22 +177,20 @@ export default function WebMapFallback({
   </button>
 
   <script>
-    var currentLat = ${lat};
-    var currentLng = ${lng};
+    var currentLat = ${activeLat};
+    var currentLng = ${activeLng};
 
-    // Initialize map
+    // Official OpenStreetMap tiles (100% clean, NO API KEY REQUIRED, NO WATERMARK)
     var map = L.map('map', {
       zoomControl: true,
       attributionControl: false
-    }).setView([currentLat, currentLng], 16);
+    }).setView([currentLat, currentLng], 15);
 
-    // Premium clean tiles (CartoDB Voyager)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      maxZoom: 19,
-      subdomains: 'abcd'
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19
     }).addTo(map);
 
-    // User Live Pulsating Dot
+    // User pulsating live dot
     var userIcon = L.divIcon({
       className: '',
       html: '<div class="user-pulse-marker"><div class="pulse-ring"></div><div class="pulse-core"></div></div>',
@@ -174,45 +199,73 @@ export default function WebMapFallback({
     });
     var userMarker = L.marker([currentLat, currentLng], { icon: userIcon }).addTo(map);
 
-    // Recenter function
-    function recenter() {
-      map.flyTo([currentLat, currentLng], 16, { animate: true, duration: 1.0 });
+    // Live browser GPS locate function
+    function triggerGpsLocate() {
+      map.locate({ setView: true, maxZoom: 16, enableHighAccuracy: true });
     }
 
-    // Nearby Request Pins
+    map.on('locationfound', function(e) {
+      currentLat = e.latlng.lat;
+      currentLng = e.latlng.lng;
+      userMarker.setLatLng(e.latlng);
+      map.flyTo(e.latlng, 16, { animate: true });
+      window.parent.postMessage({
+        type: 'LIGHTSAFE_GPS_FOUND',
+        coords: { latitude: e.latlng.lat, longitude: e.latlng.lng }
+      }, '*');
+    });
+
+    // Auto-request live location if no fixed location provided
+    ${isPendingGps ? 'triggerGpsLocate();' : ''}
+
+    // Sister Target Pin (When helper clicks Assist Sister)
+    var sister = ${sisterPinJson};
+    if (sister) {
+      var sisterIcon = L.divIcon({
+        className: '',
+        html: '<div class="sister-target-marker">📍 Sister In Need Here</div>',
+        iconSize: [160, 32],
+        iconAnchor: [80, 16]
+      });
+      var sisterMarker = L.marker([sister.lat, sister.lng], { icon: sisterIcon }).addTo(map);
+      map.flyTo([sister.lat, sister.lng], 16, { animate: true });
+    }
+
+    // Nearby Request markers (General list)
     var requests = ${requestsJson};
     requests.forEach(function(req) {
       var reqIcon = L.divIcon({
         className: '',
-        html: '<div class="emergency-pin">📍 ' + req.type + ' (' + req.distance + ')</div>',
-        iconSize: [120, 26],
-        iconAnchor: [60, 13]
-      });
-      L.marker([req.lat, req.lng], { icon: reqIcon })
-        .addTo(map)
-        .bindPopup('<b>' + req.type + '</b><br>' + req.distance + ' away');
-    });
-
-    // Helper Pin
-    var helper = ${helperJson};
-    if (helper) {
-      var helperIcon = L.divIcon({
-        className: '',
-        html: '<div style="background:#10B981;color:white;border:2px solid white;border-radius:12px;padding:4px 8px;font-size:11px;font-weight:700;box-shadow:0 3px 8px rgba(16,185,129,0.4);">💚 Helper Sister</div>',
+        html: '<div style="background:#D44D5C;color:white;border:2px solid white;border-radius:12px;padding:4px 8px;font-size:11px;font-weight:bold;box-shadow:0 2px 6px rgba(0,0,0,0.25);">📍 ' + req.type + '</div>',
         iconSize: [110, 26],
         iconAnchor: [55, 13]
       });
-      L.marker([helper.lat, helper.lng], { icon: helperIcon }).addTo(map);
-    }
+      L.marker([req.lat, req.lng], { icon: reqIcon })
+        .addTo(map)
+        .bindPopup('<b>' + req.type + '</b><br>' + req.distance);
+    });
+
+    // Listen to parent updates
+    window.addEventListener('message', function(event) {
+      if (event.data && event.data.type === 'SET_USER_COORDS') {
+        var newLatLng = [event.data.lat, event.data.lng];
+        userMarker.setLatLng(newLatLng);
+        if (!sister) {
+          map.flyTo(newLatLng, 16, { animate: true });
+        }
+      }
+    });
   </script>
 </body>
 </html>`;
-  }, [lat, lng, requestsJson, helperJson]);
+  }, [activeLat, activeLng, isPendingGps, requestsJson, sisterPinJson]);
 
   return (
     <View style={[styles.container, style]}>
       <iframe
+        ref={iframeRef}
         srcDoc={mapHtml}
+        allow="geolocation *"
         style={{
           width: '100%',
           height: '100%',
@@ -225,9 +278,9 @@ export default function WebMapFallback({
 
       {/* Floating Status Badge */}
       <View style={styles.topBadge}>
-        <View style={styles.dot} />
+        <View style={[styles.dot, isPendingGps && { backgroundColor: '#F59E0B' }]} />
         <Text style={styles.badgeText}>
-          {isEstimated ? 'Detecting GPS (Live Signal...)' : 'Live GPS Connected'}
+          {isPendingGps ? 'Locating via GPS...' : 'Live GPS Connected'}
         </Text>
       </View>
     </View>
@@ -254,6 +307,7 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderRadius: 20,
     pointerEvents: 'none',
+    zIndex: 10,
   },
   dot: {
     width: 8,

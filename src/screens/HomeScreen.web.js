@@ -215,7 +215,11 @@ export default function HomeScreen({ navigation }) {
         <View style={styles.modalContainer}>
           <Text style={styles.modalHeader}>Confirm Your Pickup Location</Text>
           <Text style={styles.modalSubHeader}>Requesting: {requestType}</Text>
-          <WebMapFallback userCoords={userCoords} style={styles.mapConfirmation} />
+          <WebMapFallback
+            userCoords={userCoords}
+            onLocationDetected={setUserCoords}
+            style={styles.mapConfirmation}
+          />
           <View style={styles.actionRow}>
             <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#E5E7EB' }]} onPress={() => setFlowState('IDLE')}>
               <Text style={{ color: '#374151', fontWeight: 'bold' }}>Cancel</Text>
@@ -257,7 +261,12 @@ export default function HomeScreen({ navigation }) {
             <Text style={styles.trackingTitle}>Live Assistance</Text>
             <View style={{ width: 60 }} />
           </View>
-          <WebMapFallback userCoords={userCoords} helperCoords={helperData?.location} style={{ flex: 1 }} />
+          <WebMapFallback
+            userCoords={userCoords}
+            helperCoords={helperData?.location}
+            onLocationDetected={setUserCoords}
+            style={{ flex: 1 }}
+          />
           <View style={styles.bottomSheetCard}>
             <Text style={styles.matchTitle}>Helper Connected!</Text>
             <Text style={styles.matchSub}>{helperData?.name} is on her way.</Text>
