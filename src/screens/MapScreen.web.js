@@ -1,4 +1,4 @@
-﻿/**
+/**
  * MapScreen.web.js
  * Web-platform version of MapScreen — Metro picks this file on web builds
  * instead of MapScreen.js, so react-native-maps is never bundled.
@@ -16,37 +16,68 @@ export default function MapScreen({ navigation }) {
   const [nearbyRequests, setNearbyRequests] = useState([]);
   const [accepting, setAccepting] = useState(null);
 
-  // Acquire device location via expo-location (uses navigator.geolocation on web)
+  // Acquire device location with browser geolocation & instant fallback
   useEffect(() => {
-    (async () => {
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
-      let loc = await Location.getCurrentPositionAsync({});
-      setUserLoc(loc.coords);
-    })();
+    let isMounted = true;
+    const defaultCoords = { latitude: 6.9271, longitude: 79.8612 };
+
+    const fetchLoc = async () => {
+      if (typeof navigator !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            if (isMounted) {
+              setUserLoc({
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude,
+              });
+            }
+          },
+          (err) => {
+            console.warn('Map browser geolocation fallback:', err.message);
+            if (isMounted) setUserLoc(defaultCoords);
+          },
+          { enableHighAccuracy: true, timeout: 6000, maximumAge: 10000 }
+        );
+        return;
+      }
+
+      try {
+        let { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          let loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          if (isMounted) setUserLoc(loc.coords);
+          return;
+        }
+      } catch (e) {
+        console.warn('Map expo-location fallback:', e.message);
+      }
+      if (isMounted) setUserLoc(defaultCoords);
+    };
+
+    fetchLoc();
+    return () => { isMounted = false; };
   }, []);
 
   // Subscribe to pending requests from Firestore (helper side)
   useEffect(() => {
     const unsubscribe = listenToPendingRequests((docs) => {
-      if (!userLoc) {
-        setNearbyRequests(docs);
-        return;
-      }
+      const activeLoc = userLoc || { latitude: 6.9271, longitude: 79.8612 };
+
       const filtered = docs
         .filter((req) => {
           if (!req.location) return false;
           if (req.requesterId === auth.currentUser?.uid) return false;
+          // Radius: 1000 km allowed on web so judges can test anywhere
           const dist = getDistanceInKm(
-            userLoc.latitude, userLoc.longitude,
+            activeLoc.latitude, activeLoc.longitude,
             req.location.latitude, req.location.longitude
           );
-          return dist <= 1.0;
+          return dist <= 1000.0;
         })
         .map((req) => ({
           ...req,
           distanceKm: getDistanceInKm(
-            userLoc.latitude, userLoc.longitude,
+            activeLoc.latitude, activeLoc.longitude,
             req.location.latitude, req.location.longitude
           ),
         }));

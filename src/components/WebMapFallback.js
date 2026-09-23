@@ -5,7 +5,7 @@
  * Rendered whenever Platform.OS === 'web' to prevent native map crashes.
  *
  * Props:
- *   userCoords   — { latitude, longitude }  (required)
+ *   userCoords   — { latitude, longitude }  (optional, defaults to fallback)
  *   helperCoords — { latitude, longitude }  (optional, shows helper pin)
  *   style        — ViewStyle override
  */
@@ -15,58 +15,60 @@ import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function WebMapFallback({ userCoords, helperCoords, style }) {
-  const lat = userCoords?.latitude?.toFixed(5) ?? '—';
-  const lng = userCoords?.longitude?.toFixed(5) ?? '—';
+  // Default fallback coordinates if device GPS is delayed or permission denied
+  const fallbackCoords = { latitude: 6.9271, longitude: 79.8612 };
+  const effectiveCoords = userCoords || fallbackCoords;
+  const isEstimated = !userCoords;
 
-  // Build an OpenStreetMap embed URL centred on the user's coordinates.
-  // bbox = (lng-0.009, lat-0.009, lng+0.009, lat+0.009) ~ 1km view
+  const lat = effectiveCoords.latitude.toFixed(4);
+  const lng = effectiveCoords.longitude.toFixed(4);
+
+  // Build an OpenStreetMap embed URL centred on the coordinates.
   const bboxPad = 0.009;
-  const osmSrc = userCoords
-    ? `https://www.openstreetmap.org/export/embed.html?bbox=${
-        (userCoords.longitude - bboxPad).toFixed(6)
-      }%2C${(userCoords.latitude - bboxPad).toFixed(6)}%2C${
-        (userCoords.longitude + bboxPad).toFixed(6)
-      }%2C${(userCoords.latitude + bboxPad).toFixed(6)}&layer=mapnik&marker=${
-        userCoords.latitude.toFixed(6)
-      }%2C${userCoords.longitude.toFixed(6)}`
-    : null;
+  const osmSrc = `https://www.openstreetmap.org/export/embed.html?bbox=${
+    (effectiveCoords.longitude - bboxPad).toFixed(6)
+  }%2C${(effectiveCoords.latitude - bboxPad).toFixed(6)}%2C${
+    (effectiveCoords.longitude + bboxPad).toFixed(6)
+  }%2C${(effectiveCoords.latitude + bboxPad).toFixed(6)}&layer=mapnik&marker=${
+    effectiveCoords.latitude.toFixed(6)
+  }%2C${effectiveCoords.longitude.toFixed(6)}`;
 
   return (
     <View style={[styles.container, style]}>
-      {osmSrc ? (
-        // eslint-disable-next-line react-native/no-raw-text
-        <iframe
-          src={osmSrc}
-          style={{ width: '100%', height: '100%', border: 'none', borderRadius: 12 }}
-          title="Map"
-          loading="lazy"
-        />
-      ) : (
-        <View style={styles.noGps}>
-          <Ionicons name="location-outline" size={40} color="#D44D5C" />
-          <Text style={styles.noGpsText}>Acquiring GPS…</Text>
-        </View>
-      )}
+      <iframe
+        src={osmSrc}
+        style={{
+          width: '100%',
+          height: '100%',
+          minHeight: '260px',
+          border: 'none',
+          borderRadius: 14,
+        }}
+        title="LightSafe Map"
+        loading="lazy"
+      />
 
-      {/* Coordinate overlay */}
+      {/* Coordinate overlay badges */}
       <View style={styles.overlay}>
         <View style={styles.badge}>
           <Ionicons name="navigate" size={12} color="#fff" style={{ marginRight: 4 }} />
-          <Text style={styles.badgeText}>You: {lat}, {lng}</Text>
+          <Text style={styles.badgeText}>
+            {isEstimated ? `Location: ${lat}, ${lng} (Auto)` : `You: ${lat}, ${lng}`}
+          </Text>
         </View>
 
         {helperCoords && (
           <View style={[styles.badge, styles.helperBadge]}>
             <Ionicons name="person" size={12} color="#fff" style={{ marginRight: 4 }} />
             <Text style={styles.badgeText}>
-              Helper: {helperCoords.latitude?.toFixed(5)}, {helperCoords.longitude?.toFixed(5)}
+              Helper: {helperCoords.latitude?.toFixed(4)}, {helperCoords.longitude?.toFixed(4)}
             </Text>
           </View>
         )}
 
         <View style={[styles.badge, styles.radiusBadge]}>
-          <Ionicons name="radio-button-on" size={12} color="#fff" style={{ marginRight: 4 }} />
-          <Text style={styles.badgeText}>1 km safe radius</Text>
+          <Ionicons name="shield-checkmark" size={12} color="#fff" style={{ marginRight: 4 }} />
+          <Text style={styles.badgeText}>Safe Help Zone Active</Text>
         </View>
       </View>
     </View>
@@ -76,27 +78,19 @@ export default function WebMapFallback({ userCoords, helperCoords, style }) {
 const styles = StyleSheet.create({
   container: {
     backgroundColor: '#EFF6FF',
-    borderRadius: 12,
+    borderRadius: 14,
     overflow: 'hidden',
     position: 'relative',
-  },
-  noGps: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    minHeight: 200,
-  },
-  noGpsText: {
-    marginTop: 8,
-    color: '#6B7280',
-    fontSize: 14,
+    minHeight: 280,
+    width: '100%',
   },
   overlay: {
     position: 'absolute',
-    bottom: 10,
-    left: 10,
-    right: 10,
+    bottom: 12,
+    left: 12,
+    right: 12,
     gap: 6,
+    pointerEvents: 'none',
   },
   badge: {
     flexDirection: 'row',
@@ -108,10 +102,10 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   helperBadge: {
-    backgroundColor: 'rgba(16, 185, 129, 0.85)',
+    backgroundColor: 'rgba(16, 185, 129, 0.9)',
   },
   radiusBadge: {
-    backgroundColor: 'rgba(212, 77, 92, 0.85)',
+    backgroundColor: 'rgba(212, 77, 92, 0.9)',
   },
   badgeText: {
     color: '#fff',

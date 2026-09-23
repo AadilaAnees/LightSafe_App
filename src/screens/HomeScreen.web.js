@@ -1,4 +1,4 @@
-﻿/**
+/**
  * HomeScreen.web.js
  * Web-platform version of HomeScreen — Metro picks this on web builds.
  * react-native-maps is never imported here; WebMapFallback is used instead.
@@ -28,12 +28,46 @@ export default function HomeScreen({ navigation }) {
   const [feedbackText, setFeedbackText] = useState('');
 
   useEffect(() => {
-    (async () => {
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
-      let loc = await Location.getCurrentPositionAsync({});
-      setUserCoords(loc.coords);
-    })();
+    let isMounted = true;
+    const defaultCoords = { latitude: 6.9271, longitude: 79.8612 };
+
+    const fetchLocation = async () => {
+      // 1. Direct browser geolocation for web/Safari/Chrome
+      if (typeof navigator !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            if (isMounted) {
+              setUserCoords({
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude,
+              });
+            }
+          },
+          (err) => {
+            console.warn('Browser geolocation fallback:', err.message);
+            if (isMounted) setUserCoords(defaultCoords);
+          },
+          { enableHighAccuracy: true, timeout: 6000, maximumAge: 10000 }
+        );
+        return;
+      }
+
+      // 2. Fallback to expo-location
+      try {
+        let { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          let loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          if (isMounted) setUserCoords(loc.coords);
+          return;
+        }
+      } catch (e) {
+        console.warn('expo-location fallback:', e.message);
+      }
+      if (isMounted) setUserCoords(defaultCoords);
+    };
+
+    fetchLocation();
+    return () => { isMounted = false; };
   }, []);
 
   useEffect(() => {
@@ -262,7 +296,7 @@ export default function HomeScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FAF9F6' },
-  content: { padding: 20, paddingTop: 50, paddingBottom: 110 },
+  content: { padding: 18, paddingTop: 30, paddingBottom: 90 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
   greeting: { fontSize: 16, color: '#666' },
   welcomeText: { fontSize: 24, fontWeight: 'bold', color: '#1F2937' },
@@ -276,14 +310,14 @@ const styles = StyleSheet.create({
   tile: { width: '48%', padding: 20, borderRadius: 16, marginBottom: 15, alignItems: 'center', justifyContent: 'center' },
   tileIcon: { marginBottom: 8 },
   tileTitle: { fontSize: 15, fontWeight: '600', color: '#374151' },
-  sosContainer: { marginTop: 35, marginBottom: 15 },
-  sosButton: { backgroundColor: '#3A7D7C', padding: 25, borderRadius: 100, alignItems: 'center', justifyContent: 'center', elevation: 4 },
+  sosContainer: { marginTop: 25, marginBottom: 20 },
+  sosButton: { backgroundColor: '#3A7D7C', padding: 22, borderRadius: 100, alignItems: 'center', justifyContent: 'center', elevation: 4 },
   sosText: { color: 'white', fontSize: 20, fontWeight: 'bold', letterSpacing: 1, marginTop: 4 },
   sosSubtext: { color: '#E6F4F1', fontSize: 11, marginTop: 4 },
-  modalContainer: { flex: 1, padding: 20, paddingTop: 60, backgroundColor: 'white' },
-  modalHeader: { fontSize: 22, fontWeight: 'bold', color: '#1F2937', textAlign: 'center' },
-  modalSubHeader: { fontSize: 14, color: '#D44D5C', textAlign: 'center', marginBottom: 20, marginTop: 5 },
-  mapConfirmation: { flex: 1, borderRadius: 16, marginBottom: 20, minHeight: 250 },
+  modalContainer: { flex: 1, padding: 18, paddingTop: 40, paddingBottom: 25, backgroundColor: 'white', justifyContent: 'space-between' },
+  modalHeader: { fontSize: 20, fontWeight: 'bold', color: '#1F2937', textAlign: 'center' },
+  modalSubHeader: { fontSize: 13, color: '#D44D5C', textAlign: 'center', marginBottom: 15, marginTop: 4 },
+  mapConfirmation: { flex: 1, borderRadius: 16, marginBottom: 15, minHeight: 300 },
   actionRow: { flexDirection: 'row', justifyContent: 'space-between' },
   actionBtn: { flex: 0.48, padding: 16, borderRadius: 12, alignItems: 'center' },
   searchingOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 },

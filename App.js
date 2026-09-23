@@ -33,26 +33,36 @@ const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
 
 function MainTabNavigator() {
+  const isWeb = Platform.OS === 'web';
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: false,
         tabBarActiveTintColor: '#D44D5C',
         tabBarInactiveTintColor: '#9CA3AF',
-        tabBarStyle: {
-          position: 'absolute',
-          bottom: 20,
-          left: 20,
-          right: 20,
-          elevation: 8,
-          backgroundColor: 'rgba(255, 255, 255, 0.85)',
-          borderRadius: 25,
-          height: 65,
-          paddingBottom: 10,
-          paddingTop: 8,
-          borderWidth: 1,
-          borderColor: 'rgba(255, 255, 255, 0.6)',
-        },
+        tabBarStyle: isWeb
+          ? {
+              backgroundColor: '#FFFFFF',
+              borderTopWidth: 1,
+              borderTopColor: '#E5E7EB',
+              height: 60,
+              paddingBottom: 6,
+              paddingTop: 6,
+            }
+          : {
+              position: 'absolute',
+              bottom: 20,
+              left: 20,
+              right: 20,
+              elevation: 8,
+              backgroundColor: 'rgba(255, 255, 255, 0.85)',
+              borderRadius: 25,
+              height: 65,
+              paddingBottom: 10,
+              paddingTop: 8,
+              borderWidth: 1,
+              borderColor: 'rgba(255, 255, 255, 0.6)',
+            },
         tabBarIcon: ({ color, focused }) => {
           if (route.name === 'Home') return <Ionicons name={focused ? "home" : "home-outline"} size={22} color={color} />;
           if (route.name === 'Wellness') return <MaterialCommunityIcons name={focused ? "flower" : "flower-outline"} size={24} color={color} />;
