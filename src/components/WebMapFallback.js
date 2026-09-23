@@ -1,30 +1,32 @@
 /**
  * WebMapFallback.js
  * -----------------
- * 100% genuine live GPS map for LightSafe Web.
- * Uses official OpenStreetMap tiles (no API key / no watermark).
- * Centers strictly on the user's REAL device coordinates with zero hardcoded fake locations.
+ * Ultra-responsive, mobile-first Leaflet map for LightSafe Web.
+ * - Always renders immediately (never gets stuck on a blank/locating screen).
+ * - Clean OpenStreetMap tiles (no watermarks, no API keys).
+ * - Smoothly flies to user's real GPS position as soon as detected.
+ * - Displays Sister target pin when helping.
  */
 
 import React, { useMemo, useRef, useEffect } from 'react';
-import { View, StyleSheet, Text, TouchableOpacity, ActivityIndicator } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { View, StyleSheet, Text } from 'react-native';
 
 export default function WebMapFallback({
   userCoords,
   helperCoords,
   focusCoords,
   requests = [],
-  onRequestLocation,
-  isLocating,
   style,
 }) {
   const iframeRef = useRef(null);
 
-  // Strictly use real coordinates — NO Colombo or fake fallbacks!
+  // Target coordinates to focus
   const targetCoords = focusCoords || userCoords;
+  const initialLat = targetCoords?.latitude ?? 20.0;
+  const initialLng = targetCoords?.longitude ?? 0.0;
+  const initialZoom = targetCoords ? 15 : 3;
 
-  // Real-time message communication to move marker when phone moves
+  // Stream updates to Leaflet iframe as user moves
   useEffect(() => {
     if (userCoords && iframeRef.current?.contentWindow) {
       iframeRef.current.contentWindow.postMessage(
@@ -32,11 +34,26 @@ export default function WebMapFallback({
           type: 'SET_USER_COORDS',
           lat: userCoords.latitude,
           lng: userCoords.longitude,
+          focusOnSister: !!focusCoords,
         },
         '*'
       );
     }
-  }, [userCoords?.latitude, userCoords?.longitude]);
+  }, [userCoords?.latitude, userCoords?.longitude, focusCoords]);
+
+  // When focusCoords changes (e.g. tapped Assist Sister), fly to her
+  useEffect(() => {
+    if (focusCoords && iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage(
+        {
+          type: 'FOCUS_SISTER',
+          lat: focusCoords.latitude,
+          lng: focusCoords.longitude,
+        },
+        '*'
+      );
+    }
+  }, [focusCoords?.latitude, focusCoords?.longitude]);
 
   const requestsJson = JSON.stringify(
     requests
@@ -57,12 +74,14 @@ export default function WebMapFallback({
       })
     : 'null';
 
+  const userCoordsJson = userCoords
+    ? JSON.stringify({
+        lat: userCoords.latitude,
+        lng: userCoords.longitude,
+      })
+    : 'null';
+
   const mapHtml = useMemo(() => {
-    if (!targetCoords) return '';
-
-    const lat = targetCoords.latitude;
-    const lng = targetCoords.longitude;
-
     return `<!DOCTYPE html>
 <html>
 <head>
@@ -129,18 +148,18 @@ export default function WebMapFallback({
       50% { transform: translateY(-6px); }
     }
 
-    /* Recenter Button */
+    /* Floating Recenter Button */
     .recenter-btn {
       position: absolute;
-      bottom: 18px;
-      right: 14px;
+      bottom: 14px;
+      right: 12px;
       z-index: 1000;
       background: white;
       border: none;
-      width: 44px;
-      height: 44px;
+      width: 40px;
+      height: 40px;
       border-radius: 50%;
-      box-shadow: 0 4px 14px rgba(0,0,0,0.22);
+      box-shadow: 0 3px 10px rgba(0,0,0,0.22);
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -154,8 +173,8 @@ export default function WebMapFallback({
 <body>
   <div id="map"></div>
 
-  <button class="recenter-btn" onclick="recenterToCoords()" title="Center Map">
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2.5">
+  <button class="recenter-btn" onclick="recenterMap()" title="Recenter">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2.5">
       <circle cx="12" cy="12" r="7"/>
       <line x1="12" y1="1" x2="12" y2="4"/>
       <line x1="12" y1="20" x2="12" y2="23"/>
@@ -166,34 +185,33 @@ export default function WebMapFallback({
   </button>
 
   <script>
-    var currentLat = ${lat};
-    var currentLng = ${lng};
-
-    // Clean OpenStreetMap tiles (100% Free, NO API KEY, NO WATERMARK)
     var map = L.map('map', {
       zoomControl: true,
       attributionControl: false
-    }).setView([currentLat, currentLng], 16);
+    }).setView([${initialLat}, ${initialLng}], ${initialZoom});
 
+    // Clean OpenStreetMap tiles (100% Free, NO API KEY, NO WATERMARK)
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19
     }).addTo(map);
 
-    // Live User Marker
+    var userCoords = ${userCoordsJson};
+    var userMarker = null;
+
     var userIcon = L.divIcon({
       className: '',
       html: '<div class="user-pulse-marker"><div class="pulse-ring"></div><div class="pulse-core"></div></div>',
       iconSize: [26, 26],
       iconAnchor: [13, 13]
     });
-    var userMarker = L.marker([currentLat, currentLng], { icon: userIcon }).addTo(map);
 
-    function recenterToCoords() {
-      map.flyTo([currentLat, currentLng], 16, { animate: true, duration: 1.0 });
+    if (userCoords) {
+      userMarker = L.marker([userCoords.lat, userCoords.lng], { icon: userIcon }).addTo(map);
     }
 
-    // Sister Destination Pin
+    // Sister Target Pin
     var sister = ${sisterPinJson};
+    var sisterMarker = null;
     if (sister) {
       var sisterIcon = L.divIcon({
         className: '',
@@ -201,69 +219,68 @@ export default function WebMapFallback({
         iconSize: [140, 32],
         iconAnchor: [70, 16]
       });
-      L.marker([sister.lat, sister.lng], { icon: sisterIcon }).addTo(map);
+      sisterMarker = L.marker([sister.lat, sister.lng], { icon: sisterIcon }).addTo(map);
       map.flyTo([sister.lat, sister.lng], 16, { animate: true });
     }
 
-    // Nearby Emergency Pins
+    // Nearby Request markers
     var requests = ${requestsJson};
     requests.forEach(function(req) {
       var reqIcon = L.divIcon({
         className: '',
-        html: '<div style="background:#D44D5C;color:white;border:2px solid white;border-radius:12px;padding:4px 8px;font-size:11px;font-weight:bold;box-shadow:0 2px 6px rgba(0,0,0,0.25);">📍 ' + req.type + '</div>',
-        iconSize: [110, 26],
-        iconAnchor: [55, 13]
+        html: '<div style="background:#D44D5C;color:white;border:2px solid white;border-radius:12px;padding:3px 7px;font-size:11px;font-weight:bold;box-shadow:0 2px 6px rgba(0,0,0,0.25);">📍 ' + req.type + '</div>',
+        iconSize: [100, 24],
+        iconAnchor: [50, 12]
       });
       L.marker([req.lat, req.lng], { icon: reqIcon })
         .addTo(map)
         .bindPopup('<b>' + req.type + '</b><br>' + req.distance);
     });
 
-    // Handle real-time updates from parent as phone moves
+    function recenterMap() {
+      if (sister) {
+        map.flyTo([sister.lat, sister.lng], 16, { animate: true });
+      } else if (userMarker) {
+        map.flyTo(userMarker.getLatLng(), 16, { animate: true });
+      }
+    }
+
+    // Handle messages from parent window
     window.addEventListener('message', function(event) {
-      if (event.data && event.data.type === 'SET_USER_COORDS') {
-        currentLat = event.data.lat;
-        currentLng = event.data.lng;
-        userMarker.setLatLng([currentLat, currentLng]);
-        if (!sister) {
-          map.flyTo([currentLat, currentLng], 16, { animate: true });
+      if (!event.data) return;
+
+      if (event.data.type === 'SET_USER_COORDS') {
+        var latLng = [event.data.lat, event.data.lng];
+        if (!userMarker) {
+          userMarker = L.marker(latLng, { icon: userIcon }).addTo(map);
+        } else {
+          userMarker.setLatLng(latLng);
         }
+        if (!event.data.focusOnSister) {
+          map.flyTo(latLng, 16, { animate: true, duration: 1.2 });
+        }
+      }
+
+      if (event.data.type === 'FOCUS_SISTER') {
+        var sLatLng = [event.data.lat, event.data.lng];
+        if (sisterMarker) {
+          sisterMarker.setLatLng(sLatLng);
+        } else {
+          var sIcon = L.divIcon({
+            className: '',
+            html: '<div class="sister-target-marker">📍 Sister in Need</div>',
+            iconSize: [140, 32],
+            iconAnchor: [70, 16]
+          });
+          sisterMarker = L.marker(sLatLng, { icon: sIcon }).addTo(map);
+        }
+        map.flyTo(sLatLng, 16, { animate: true });
       }
     });
   </script>
 </body>
 </html>`;
-  }, [targetCoords?.latitude, targetCoords?.longitude, requestsJson, sisterPinJson]);
-
-  // If no GPS coordinates yet, show the live GPS radar loader
-  if (!targetCoords) {
-    return (
-      <View style={[styles.container, styles.locatingContainer, style]}>
-        <View style={styles.radarPulse}>
-          <Ionicons name="navigate" size={38} color="#D44D5C" />
-        </View>
-        <Text style={styles.locatingTitle}>Acquiring Your Exact Live GPS...</Text>
-        <Text style={styles.locatingSub}>
-          Connecting to your phone's satellites. Please tap "Allow" if your browser prompts for location.
-        </Text>
-
-        <TouchableOpacity
-          style={styles.retryGpsBtn}
-          onPress={onRequestLocation}
-          disabled={isLocating}
-        >
-          {isLocating ? (
-            <ActivityIndicator size="small" color="white" />
-          ) : (
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Ionicons name="locate" size={18} color="white" style={{ marginRight: 6 }} />
-              <Text style={styles.retryGpsText}>Detect My Exact Location</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-      </View>
-    );
-  }
+  }, [initialLat, initialLng, initialZoom, requestsJson, sisterPinJson, userCoordsJson]);
 
   return (
     <View style={[styles.container, style]}>
@@ -273,20 +290,21 @@ export default function WebMapFallback({
         style={{
           width: '100%',
           height: '100%',
-          minHeight: '280px',
           border: 'none',
-          borderRadius: 16,
+          borderRadius: 14,
         }}
         title="Live Map"
       />
 
-      {/* Floating Live GPS Coordinates Badge */}
+      {/* Floating GPS Status Pill */}
       <View style={styles.topBadge}>
-        <View style={styles.dot} />
+        <View style={[styles.dot, !userCoords && { backgroundColor: '#F59E0B' }]} />
         <Text style={styles.badgeText}>
           {focusCoords
-            ? `Sister: ${focusCoords.latitude.toFixed(4)}, ${focusCoords.longitude.toFixed(4)}`
-            : `Live GPS: ${userCoords?.latitude.toFixed(4)}, ${userCoords?.longitude.toFixed(4)}`}
+            ? 'Showing Sister Location'
+            : userCoords
+            ? `Live GPS: ${userCoords.latitude.toFixed(4)}, ${userCoords.longitude.toFixed(4)}`
+            : 'Connecting GPS...'}
         </Text>
       </View>
     </View>
@@ -295,64 +313,20 @@ export default function WebMapFallback({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#F1F5F9',
-    borderRadius: 16,
+    backgroundColor: '#E2E8F0',
+    borderRadius: 14,
     overflow: 'hidden',
     position: 'relative',
-    minHeight: 280,
     width: '100%',
-  },
-  locatingContainer: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-    backgroundColor: '#FFF7F8',
-    borderWidth: 1,
-    borderColor: '#FECDD3',
-  },
-  radarPulse: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: '#FFE4E6',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  locatingTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#9F1239',
-    marginBottom: 6,
-    textAlign: 'center',
-  },
-  locatingSub: {
-    fontSize: 12,
-    color: '#6B7280',
-    textAlign: 'center',
-    lineHeight: 18,
-    marginBottom: 18,
-    maxWidth: 280,
-  },
-  retryGpsBtn: {
-    backgroundColor: '#D44D5C',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 14,
-    elevation: 2,
-  },
-  retryGpsText: {
-    color: 'white',
-    fontWeight: 'bold',
-    fontSize: 13,
+    minHeight: 220,
   },
   topBadge: {
     position: 'absolute',
-    top: 12,
-    left: 12,
+    top: 10,
+    left: 10,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.88)',
+    backgroundColor: 'rgba(15, 23, 42, 0.86)',
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 20,
@@ -370,6 +344,5 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 11,
     fontWeight: '600',
-    letterSpacing: 0.2,
   },
 });

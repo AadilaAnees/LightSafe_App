@@ -1,15 +1,16 @@
 /**
  * MapScreen.web.js
- * Web-platform version of MapScreen.
- * Displays live map, nearby requests, and when "Assist Sister" is tapped,
- * focuses on her location first with distance and a "Chat with Sister" button.
+ * Mobile-optimized helper map screen.
+ * - Filters out stale/old requests (shows only real recent active requests).
+ * - Instant GPS tracking on mobile.
+ * - Shows sister location first, with prominent Chat button.
  */
 
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert } from 'react-native';
-import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { getDistanceInKm } from '../utils/distance';
+import { trackLiveLocation } from '../utils/geolocation';
 import { listenToPendingRequests, acceptRequest } from '../services/requestService';
 import { auth } from '../services/firebase';
 import WebMapFallback from '../components/WebMapFallback';
@@ -20,99 +21,61 @@ export default function MapScreen({ navigation }) {
   const [accepting, setAccepting] = useState(null);
   const [activeSister, setActiveSister] = useState(null);
 
-  const [isLocating, setIsLocating] = useState(false);
-
-  const fetchLiveLoc = () => {
-    setIsLocating(true);
-    if (typeof navigator !== 'undefined' && navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setIsLocating(false);
-          setUserLoc({
-            latitude: pos.coords.latitude,
-            longitude: pos.coords.longitude,
-          });
-        },
-        () => {},
-        { enableHighAccuracy: false, timeout: 8000, maximumAge: 30000 }
-      );
-
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setIsLocating(false);
-          setUserLoc({
-            latitude: pos.coords.latitude,
-            longitude: pos.coords.longitude,
-          });
-        },
-        () => { setIsLocating(false); },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-      );
-    }
-  };
-
-  // Acquire live continuous GPS
+  // Live GPS tracking on mobile
   useEffect(() => {
-    let isMounted = true;
-    let watchId = null;
-
-    fetchLiveLoc();
-
-    if (typeof navigator !== 'undefined' && navigator.geolocation) {
-      watchId = navigator.geolocation.watchPosition(
-        (pos) => {
-          if (isMounted) {
-            setUserLoc({
-              latitude: pos.coords.latitude,
-              longitude: pos.coords.longitude,
-            });
-          }
-        },
-        (err) => console.warn('Map live tracking warning:', err.message),
-        { enableHighAccuracy: true, maximumAge: 2000 }
-      );
-    }
-
-    return () => {
-      isMounted = false;
-      if (watchId !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
-        navigator.geolocation.clearWatch(watchId);
-      }
-    };
+    const cancel = trackLiveLocation((coords) => {
+      setUserLoc(coords);
+    });
+    return cancel;
   }, []);
 
-  // Subscribe to pending requests from Firestore
+  // Subscribe to pending requests from Firestore (real active requests only)
   useEffect(() => {
     const unsubscribe = listenToPendingRequests((docs) => {
+      const now = Date.now();
+      const twoHoursAgo = now - 2 * 60 * 60 * 1000;
+
       const filtered = docs
         .filter((req) => {
           if (!req.location) return false;
+          // Don't show own requests in helper view
           if (req.requesterId === auth.currentUser?.uid) return false;
-          if (!userLoc) return true;
-          const dist = getDistanceInKm(
-            userLoc.latitude, userLoc.longitude,
-            req.location.latitude, req.location.longitude
-          );
-          return dist <= 1000.0;
+
+          // Filter out stale dummy/test requests older than 2 hours
+          if (req.createdAt?.toMillis && req.createdAt.toMillis() < twoHoursAgo) {
+            return false;
+          }
+          return true;
         })
-        .map((req) => ({
-          ...req,
-          distanceKm: userLoc
+        .map((req) => {
+          const dist = userLoc
             ? getDistanceInKm(
-                userLoc.latitude, userLoc.longitude,
-                req.location.latitude, req.location.longitude
+                userLoc.latitude,
+                userLoc.longitude,
+                req.location.latitude,
+                req.location.longitude
               )
-            : null,
-        }));
+            : null;
+          return {
+            ...req,
+            distanceKm: dist,
+          };
+        });
+
       setNearbyRequests(filtered);
     });
+
     return () => unsubscribe();
   }, [userLoc]);
 
-  // When helper clicks Assist Sister:
+  // When helper clicks View on Map: focus her location
+  const handleViewOnMap = (item) => {
+    setActiveSister(item);
+  };
+
+  // When helper clicks Assist & Chat:
   // 1. Accept request in Firestore
-  // 2. Focus map on sister's location FIRST
-  // 3. Show chat option in helper panel
+  // 2. Focus map on sister's location
   const handleAssist = async (item) => {
     if (accepting) return;
     setAccepting(item.id);
@@ -121,7 +84,7 @@ export default function MapScreen({ navigation }) {
       setActiveSister(item);
     } catch (err) {
       console.error('acceptRequest failed:', err);
-      Alert.alert('Error', 'Could not accept request. It may have already been taken.');
+      Alert.alert('Notice', 'Could not accept request. It may have already been resolved.');
     } finally {
       setAccepting(null);
     }
@@ -129,19 +92,18 @@ export default function MapScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
-      {/* Live Map with Focus on Sister's Location when assisting */}
+      {/* Map View (Compact for mobile so sheet is never cut off) */}
       <WebMapFallback
         userCoords={userLoc}
         focusCoords={activeSister?.location}
         requests={nearbyRequests}
-        onRequestLocation={fetchLiveLoc}
-        isLocating={isLocating}
         style={styles.map}
       />
 
-      {/* Dynamic Sliding Sheet: Shows Sister Details OR Nearby List */}
+      {/* Mobile Sliding Sheet */}
       <View style={styles.sheet}>
         {activeSister ? (
+          /* Active Sister Detail Panel with direct Chat button */
           <View style={styles.sisterPanel}>
             <View style={styles.sisterHeaderRow}>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -149,7 +111,7 @@ export default function MapScreen({ navigation }) {
                 <Text style={styles.sisterPanelTitle}>Assisting Sister</Text>
               </View>
               <TouchableOpacity onPress={() => setActiveSister(null)} style={{ padding: 4 }}>
-                <Text style={styles.closeActiveText}>✕ Back to List</Text>
+                <Text style={styles.closeActiveText}>✕ Back</Text>
               </TouchableOpacity>
             </View>
 
@@ -159,11 +121,11 @@ export default function MapScreen({ navigation }) {
               <Text style={styles.sisterDistValue}>
                 {activeSister.distanceKm
                   ? `📍 ~${(activeSister.distanceKm * 1000).toFixed(0)} meters away (marked on map above)`
-                  : '📍 Location pinned on map'}
+                  : '📍 Marked on map above'}
               </Text>
             </View>
 
-            <View style={styles.sisterActionsRow}>
+            <View style={styles.sisterActionsCol}>
               <TouchableOpacity
                 style={styles.chatActionBtn}
                 onPress={() =>
@@ -174,50 +136,74 @@ export default function MapScreen({ navigation }) {
                 }
               >
                 <Ionicons name="chatbubbles" size={18} color="white" style={{ marginRight: 8 }} />
-                <Text style={styles.chatActionText}>Chat with Sister</Text>
+                <Text style={styles.chatActionText}>Open Chat with Sister</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={styles.completeActionBtn}
                 onPress={() => navigation.navigate('HelperCompletion')}
               >
-                <Ionicons name="checkmark-done" size={18} color="white" style={{ marginRight: 6 }} />
-                <Text style={styles.completeActionText}>Delivered</Text>
+                <Ionicons name="checkmark-done" size={18} color="#10B981" style={{ marginRight: 6 }} />
+                <Text style={styles.completeActionText}>Mark Help Delivered</Text>
               </TouchableOpacity>
             </View>
           </View>
         ) : (
-          <>
-            <Text style={styles.sheetTitle}>Sisters Needing Help Nearby</Text>
+          /* Real-time active requests list */
+          <View style={{ flex: 1 }}>
+            <View style={styles.listHeaderRow}>
+              <Text style={styles.sheetTitle}>Sisters Needing Help Nearby</Text>
+              <Text style={styles.activeCountBadge}>
+                {nearbyRequests.length} Active
+              </Text>
+            </View>
+
             <FlatList
               data={nearbyRequests}
               keyExtractor={(item) => item.id}
+              contentContainerStyle={{ paddingBottom: 20 }}
               ListEmptyComponent={
-                <Text style={styles.emptyText}>No active requests within range right now.</Text>
+                <View style={styles.emptyBox}>
+                  <Ionicons name="shield-checkmark-outline" size={36} color="#10B981" />
+                  <Text style={styles.emptyTitle}>All Safe Nearby!</Text>
+                  <Text style={styles.emptySub}>
+                    No active emergency requests in your area right now. When someone taps "Need a Pad" or "Instant Help", it will appear here in real time.
+                  </Text>
+                </View>
               }
               renderItem={({ item }) => (
                 <View style={styles.requestCard}>
-                  <View>
+                  <View style={{ flex: 1 }}>
                     <Text style={styles.reqType}>{item.type}</Text>
                     <Text style={styles.reqDist}>
                       {item.distanceKm
-                        ? `~${(item.distanceKm * 1000).toFixed(0)} meters away`
+                        ? `~${(item.distanceKm * 1000).toFixed(0)}m away`
                         : 'Nearby'}
                     </Text>
                   </View>
-                  <TouchableOpacity
-                    style={[styles.assistBtn, accepting === item.id && { opacity: 0.6 }]}
-                    onPress={() => handleAssist(item)}
-                    disabled={!!accepting}
-                  >
-                    <Text style={styles.assistText}>
-                      {accepting === item.id ? 'Connecting...' : 'Assist Sister'}
-                    </Text>
-                  </TouchableOpacity>
+
+                  <View style={styles.btnRow}>
+                    <TouchableOpacity
+                      style={styles.viewMapBtn}
+                      onPress={() => handleViewOnMap(item)}
+                    >
+                      <Ionicons name="locate" size={14} color="#D44D5C" style={{ marginRight: 4 }} />
+                      <Text style={styles.viewMapText}>Map</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.assistBtn}
+                      onPress={() => handleAssist(item)}
+                      disabled={accepting === item.id}
+                    >
+                      <Ionicons name="chatbubbles" size={14} color="white" style={{ marginRight: 4 }} />
+                      <Text style={styles.assistText}>Assist</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               )}
             />
-          </>
+          </View>
         )}
       </View>
     </View>
@@ -226,66 +212,108 @@ export default function MapScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FAF9F6', paddingBottom: 65 },
-  map: { flex: 0.55, minHeight: 300 },
+  map: { height: 230, width: '100%' },
   sheet: {
-    flex: 0.45,
+    flex: 1,
     backgroundColor: 'white',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 20,
-    elevation: 10,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    padding: 16,
+    paddingBottom: 20,
+    elevation: 8,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 5,
   },
-  sheetTitle: { fontSize: 16, fontWeight: 'bold', color: '#1F2937', marginBottom: 12 },
-  emptyText: { color: '#888', fontStyle: 'italic', marginTop: 10 },
+  listHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  sheetTitle: { fontSize: 15, fontWeight: 'bold', color: '#1F2937' },
+  activeCountBadge: {
+    backgroundColor: '#FEE2E2',
+    color: '#D44D5C',
+    fontSize: 11,
+    fontWeight: 'bold',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+  },
+  emptyBox: { alignItems: 'center', justifyContent: 'center', paddingVertical: 35 },
+  emptyTitle: { fontSize: 15, fontWeight: 'bold', color: '#1F2937', marginTop: 8 },
+  emptySub: { fontSize: 12, color: '#6B7280', textAlign: 'center', marginTop: 4, lineHeight: 18, maxWidth: 280 },
   requestCard: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 14,
+    padding: 12,
     backgroundColor: '#FFF5F7',
-    borderRadius: 14,
-    marginBottom: 10,
+    borderRadius: 12,
+    marginBottom: 8,
     borderWidth: 1,
     borderColor: '#FED7AA',
   },
-  reqType: { fontSize: 15, fontWeight: '600', color: '#D44D5C' },
-  reqDist: { fontSize: 12, color: '#666', marginTop: 2 },
-  assistBtn: { backgroundColor: '#10B981', paddingVertical: 9, paddingHorizontal: 16, borderRadius: 20 },
-  assistText: { color: 'white', fontWeight: '700', fontSize: 13 },
+  reqType: { fontSize: 14, fontWeight: 'bold', color: '#D44D5C' },
+  reqDist: { fontSize: 11, color: '#666', marginTop: 2 },
+  btnRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  viewMapBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FCE7F3',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+  },
+  viewMapText: { color: '#D44D5C', fontWeight: 'bold', fontSize: 12 },
+  assistBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#10B981',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+  },
+  assistText: { color: 'white', fontWeight: 'bold', fontSize: 12 },
 
   // Active Sister Helping Panel
   sisterPanel: { flex: 1, justifyContent: 'space-between' },
-  sisterHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  pulseDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#10B981', marginRight: 8 },
-  sisterPanelTitle: { fontSize: 16, fontWeight: 'bold', color: '#10B981' },
-  closeActiveText: { fontSize: 13, color: '#6B7280', fontWeight: '600' },
-  sisterInfoBox: { backgroundColor: '#F0FDF4', padding: 14, borderRadius: 14, borderWidth: 1, borderColor: '#DCFCE7', marginVertical: 6 },
-  sisterNeedLabel: { fontSize: 11, color: '#166534', textTransform: 'uppercase', fontWeight: 'bold' },
-  sisterNeedValue: { fontSize: 18, fontWeight: 'bold', color: '#15803D', marginTop: 2 },
-  sisterDistValue: { fontSize: 13, color: '#166534', marginTop: 4 },
-  sisterActionsRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 },
+  sisterHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  pulseDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: '#10B981', marginRight: 6 },
+  sisterPanelTitle: { fontSize: 15, fontWeight: 'bold', color: '#10B981' },
+  closeActiveText: { fontSize: 12, color: '#6B7280', fontWeight: '600' },
+  sisterInfoBox: {
+    backgroundColor: '#F0FDF4',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#DCFCE7',
+    marginVertical: 8,
+  },
+  sisterNeedLabel: { fontSize: 10, color: '#166534', textTransform: 'uppercase', fontWeight: 'bold' },
+  sisterNeedValue: { fontSize: 16, fontWeight: 'bold', color: '#15803D', marginTop: 2 },
+  sisterDistValue: { fontSize: 12, color: '#166534', marginTop: 2 },
+  sisterActionsCol: { gap: 8, marginTop: 4 },
   chatActionBtn: {
-    flex: 0.65,
     backgroundColor: '#D44D5C',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 14,
-    borderRadius: 14,
+    paddingVertical: 13,
+    borderRadius: 12,
   },
   chatActionText: { color: 'white', fontWeight: 'bold', fontSize: 14 },
   completeActionBtn: {
-    flex: 0.32,
-    backgroundColor: '#10B981',
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 14,
-    borderRadius: 14,
+    paddingVertical: 11,
+    borderRadius: 12,
   },
-  completeActionText: { color: 'white', fontWeight: 'bold', fontSize: 13 },
+  completeActionText: { color: '#374151', fontWeight: '600', fontSize: 13 },
 });

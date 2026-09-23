@@ -16,6 +16,7 @@ import {
   listenToRequest,
   deleteRequestSession,
 } from '../services/requestService';
+import { trackLiveLocation } from '../utils/geolocation';
 import WebMapFallback from '../components/WebMapFallback';
 
 export default function HomeScreen({ navigation }) {
@@ -27,73 +28,12 @@ export default function HomeScreen({ navigation }) {
   const [rating, setRating] = useState(5);
   const [feedbackText, setFeedbackText] = useState('');
 
-  const [isLocating, setIsLocating] = useState(false);
-
-  const fetchLiveLocation = () => {
-    setIsLocating(true);
-    if (typeof navigator !== 'undefined' && navigator.geolocation) {
-      // 1. Quick resolve via network/wifi (<1s)
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setIsLocating(false);
-          setUserCoords({
-            latitude: pos.coords.latitude,
-            longitude: pos.coords.longitude,
-          });
-        },
-        (err) => {
-          console.warn('Initial quick geo warning:', err.message);
-        },
-        { enableHighAccuracy: false, timeout: 8000, maximumAge: 30000 }
-      );
-
-      // 2. High accuracy satellite GPS (<15s)
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setIsLocating(false);
-          setUserCoords({
-            latitude: pos.coords.latitude,
-            longitude: pos.coords.longitude,
-          });
-        },
-        (err) => {
-          setIsLocating(false);
-          console.warn('High accuracy geo warning:', err.message);
-        },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-      );
-    }
-  };
-
+  // Continuous live GPS tracking with instant resolution
   useEffect(() => {
-    let isMounted = true;
-    let watchId = null;
-
-    // Start initial live position query
-    fetchLiveLocation();
-
-    // Continuous live tracking as user carries the phone
-    if (typeof navigator !== 'undefined' && navigator.geolocation) {
-      watchId = navigator.geolocation.watchPosition(
-        (pos) => {
-          if (isMounted) {
-            setUserCoords({
-              latitude: pos.coords.latitude,
-              longitude: pos.coords.longitude,
-            });
-          }
-        },
-        (err) => console.warn('Live watch warning:', err.message),
-        { enableHighAccuracy: true, maximumAge: 2000 }
-      );
-    }
-
-    return () => {
-      isMounted = false;
-      if (watchId !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
-        navigator.geolocation.clearWatch(watchId);
-      }
-    };
+    const cancel = trackLiveLocation((coords) => {
+      setUserCoords(coords);
+    });
+    return cancel;
   }, []);
 
   useEffect(() => {
@@ -362,12 +302,12 @@ const styles = StyleSheet.create({
   sosButton: { backgroundColor: '#3A7D7C', padding: 22, borderRadius: 100, alignItems: 'center', justifyContent: 'center', elevation: 4 },
   sosText: { color: 'white', fontSize: 20, fontWeight: 'bold', letterSpacing: 1, marginTop: 4 },
   sosSubtext: { color: '#E6F4F1', fontSize: 11, marginTop: 4 },
-  modalContainer: { flex: 1, padding: 18, paddingTop: 40, paddingBottom: 25, backgroundColor: 'white', justifyContent: 'space-between' },
+  modalContainer: { flex: 1, padding: 16, paddingTop: 40, paddingBottom: 20, backgroundColor: 'white', justifyContent: 'space-between' },
   modalHeader: { fontSize: 20, fontWeight: 'bold', color: '#1F2937', textAlign: 'center' },
-  modalSubHeader: { fontSize: 13, color: '#D44D5C', textAlign: 'center', marginBottom: 15, marginTop: 4 },
-  mapConfirmation: { flex: 1, borderRadius: 16, marginBottom: 15, minHeight: 300 },
+  modalSubHeader: { fontSize: 13, color: '#D44D5C', textAlign: 'center', marginBottom: 10, marginTop: 2 },
+  mapConfirmation: { height: 260, borderRadius: 16, marginBottom: 12 },
   actionRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  actionBtn: { flex: 0.48, padding: 16, borderRadius: 12, alignItems: 'center' },
+  actionBtn: { flex: 0.48, padding: 15, borderRadius: 12, alignItems: 'center' },
   searchingOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 },
   searchingBox: { backgroundColor: 'white', padding: 30, borderRadius: 20, alignItems: 'center', width: '100%' },
   searchingTitle: { fontSize: 20, fontWeight: 'bold', marginTop: 15, color: '#1F2937' },
