@@ -1,13 +1,13 @@
 /**
  * WebMapFallback.js
  * -----------------
- * Clean, watermark-free interactive map for LightSafe Web.
- * Uses official OpenStreetMap tiles (no API key / watermark),
- * real-time GPS tracking with allow="geolocation", and smooth focus on Sister's location.
+ * 100% genuine live GPS map for LightSafe Web.
+ * Uses official OpenStreetMap tiles (no API key / no watermark).
+ * Centers strictly on the user's REAL device coordinates with zero hardcoded fake locations.
  */
 
 import React, { useMemo, useRef, useEffect } from 'react';
-import { View, StyleSheet, Text, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, Text, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function WebMapFallback({
@@ -15,31 +15,16 @@ export default function WebMapFallback({
   helperCoords,
   focusCoords,
   requests = [],
-  onLocationDetected,
+  onRequestLocation,
+  isLocating,
   style,
 }) {
   const iframeRef = useRef(null);
 
-  // If focusCoords provided (e.g. assisting a sister), focus on her.
-  // Otherwise use userCoords, or fallback if GPS still pending.
-  const activeLat = focusCoords?.latitude ?? userCoords?.latitude ?? 6.9271;
-  const activeLng = focusCoords?.longitude ?? userCoords?.longitude ?? 79.8612;
-  const isPendingGps = !userCoords && !focusCoords;
+  // Strictly use real coordinates — NO Colombo or fake fallbacks!
+  const targetCoords = focusCoords || userCoords;
 
-  // Listen to GPS messages from inside Leaflet iframe
-  useEffect(() => {
-    const handleMsg = (e) => {
-      if (e.data && e.data.type === 'LIGHTSAFE_GPS_FOUND') {
-        if (onLocationDetected && e.data.coords) {
-          onLocationDetected(e.data.coords);
-        }
-      }
-    };
-    window.addEventListener('message', handleMsg);
-    return () => window.removeEventListener('message', handleMsg);
-  }, [onLocationDetected]);
-
-  // When userCoords changes in parent, inform Leaflet
+  // Real-time message communication to move marker when phone moves
   useEffect(() => {
     if (userCoords && iframeRef.current?.contentWindow) {
       iframeRef.current.contentWindow.postMessage(
@@ -51,7 +36,7 @@ export default function WebMapFallback({
         '*'
       );
     }
-  }, [userCoords]);
+  }, [userCoords?.latitude, userCoords?.longitude]);
 
   const requestsJson = JSON.stringify(
     requests
@@ -73,6 +58,11 @@ export default function WebMapFallback({
     : 'null';
 
   const mapHtml = useMemo(() => {
+    if (!targetCoords) return '';
+
+    const lat = targetCoords.latitude;
+    const lng = targetCoords.longitude;
+
     return `<!DOCTYPE html>
 <html>
 <head>
@@ -84,34 +74,34 @@ export default function WebMapFallback({
     * { box-sizing: border-box; }
     html, body, #map {
       margin: 0; padding: 0; width: 100%; height: 100%;
-      background: #e2e8f0;
+      background: #f1f5f9;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       overflow: hidden;
     }
 
-    /* Pulsating Live User Dot */
+    /* Live GPS Pulsating Dot */
     .user-pulse-marker {
       position: relative;
-      width: 24px;
-      height: 24px;
+      width: 26px;
+      height: 26px;
     }
     .pulse-core {
       position: absolute;
-      top: 4px; left: 4px;
+      top: 5px; left: 5px;
       width: 16px; height: 16px;
       background: #2563EB;
       border: 3px solid #FFFFFF;
       border-radius: 50%;
-      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.5);
+      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.55);
       z-index: 2;
     }
     .pulse-ring {
       position: absolute;
-      top: -4px; left: -4px;
+      top: -3px; left: -3px;
       width: 32px; height: 32px;
       background: rgba(37, 99, 235, 0.35);
       border-radius: 50%;
-      animation: pulse-wave 2.2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+      animation: pulse-wave 2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
       z-index: 1;
     }
     @keyframes pulse-wave {
@@ -119,7 +109,7 @@ export default function WebMapFallback({
       100% { transform: scale(1.9); opacity: 0; }
     }
 
-    /* Sister emergency target marker */
+    /* Sister Target Marker */
     .sister-target-marker {
       background: #D44D5C;
       color: white;
@@ -158,15 +148,14 @@ export default function WebMapFallback({
       outline: none;
     }
     .recenter-btn:active { transform: scale(0.92); }
-
     .leaflet-control-attribution { display: none !important; }
   </style>
 </head>
 <body>
   <div id="map"></div>
 
-  <button class="recenter-btn" onclick="triggerGpsLocate()" title="Locate Me">
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2.4">
+  <button class="recenter-btn" onclick="recenterToCoords()" title="Center Map">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2.5">
       <circle cx="12" cy="12" r="7"/>
       <line x1="12" y1="1" x2="12" y2="4"/>
       <line x1="12" y1="20" x2="12" y2="23"/>
@@ -177,61 +166,46 @@ export default function WebMapFallback({
   </button>
 
   <script>
-    var currentLat = ${activeLat};
-    var currentLng = ${activeLng};
+    var currentLat = ${lat};
+    var currentLng = ${lng};
 
-    // Official OpenStreetMap tiles (100% clean, NO API KEY REQUIRED, NO WATERMARK)
+    // Clean OpenStreetMap tiles (100% Free, NO API KEY, NO WATERMARK)
     var map = L.map('map', {
       zoomControl: true,
       attributionControl: false
-    }).setView([currentLat, currentLng], 15);
+    }).setView([currentLat, currentLng], 16);
 
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19
     }).addTo(map);
 
-    // User pulsating live dot
+    // Live User Marker
     var userIcon = L.divIcon({
       className: '',
       html: '<div class="user-pulse-marker"><div class="pulse-ring"></div><div class="pulse-core"></div></div>',
-      iconSize: [24, 24],
-      iconAnchor: [12, 12]
+      iconSize: [26, 26],
+      iconAnchor: [13, 13]
     });
     var userMarker = L.marker([currentLat, currentLng], { icon: userIcon }).addTo(map);
 
-    // Live browser GPS locate function
-    function triggerGpsLocate() {
-      map.locate({ setView: true, maxZoom: 16, enableHighAccuracy: true });
+    function recenterToCoords() {
+      map.flyTo([currentLat, currentLng], 16, { animate: true, duration: 1.0 });
     }
 
-    map.on('locationfound', function(e) {
-      currentLat = e.latlng.lat;
-      currentLng = e.latlng.lng;
-      userMarker.setLatLng(e.latlng);
-      map.flyTo(e.latlng, 16, { animate: true });
-      window.parent.postMessage({
-        type: 'LIGHTSAFE_GPS_FOUND',
-        coords: { latitude: e.latlng.lat, longitude: e.latlng.lng }
-      }, '*');
-    });
-
-    // Auto-request live location if no fixed location provided
-    ${isPendingGps ? 'triggerGpsLocate();' : ''}
-
-    // Sister Target Pin (When helper clicks Assist Sister)
+    // Sister Destination Pin
     var sister = ${sisterPinJson};
     if (sister) {
       var sisterIcon = L.divIcon({
         className: '',
-        html: '<div class="sister-target-marker">📍 Sister In Need Here</div>',
-        iconSize: [160, 32],
-        iconAnchor: [80, 16]
+        html: '<div class="sister-target-marker">📍 Sister in Need</div>',
+        iconSize: [140, 32],
+        iconAnchor: [70, 16]
       });
-      var sisterMarker = L.marker([sister.lat, sister.lng], { icon: sisterIcon }).addTo(map);
+      L.marker([sister.lat, sister.lng], { icon: sisterIcon }).addTo(map);
       map.flyTo([sister.lat, sister.lng], 16, { animate: true });
     }
 
-    // Nearby Request markers (General list)
+    // Nearby Emergency Pins
     var requests = ${requestsJson};
     requests.forEach(function(req) {
       var reqIcon = L.divIcon({
@@ -245,27 +219,57 @@ export default function WebMapFallback({
         .bindPopup('<b>' + req.type + '</b><br>' + req.distance);
     });
 
-    // Listen to parent updates
+    // Handle real-time updates from parent as phone moves
     window.addEventListener('message', function(event) {
       if (event.data && event.data.type === 'SET_USER_COORDS') {
-        var newLatLng = [event.data.lat, event.data.lng];
-        userMarker.setLatLng(newLatLng);
+        currentLat = event.data.lat;
+        currentLng = event.data.lng;
+        userMarker.setLatLng([currentLat, currentLng]);
         if (!sister) {
-          map.flyTo(newLatLng, 16, { animate: true });
+          map.flyTo([currentLat, currentLng], 16, { animate: true });
         }
       }
     });
   </script>
 </body>
 </html>`;
-  }, [activeLat, activeLng, isPendingGps, requestsJson, sisterPinJson]);
+  }, [targetCoords?.latitude, targetCoords?.longitude, requestsJson, sisterPinJson]);
+
+  // If no GPS coordinates yet, show the live GPS radar loader
+  if (!targetCoords) {
+    return (
+      <View style={[styles.container, styles.locatingContainer, style]}>
+        <View style={styles.radarPulse}>
+          <Ionicons name="navigate" size={38} color="#D44D5C" />
+        </View>
+        <Text style={styles.locatingTitle}>Acquiring Your Exact Live GPS...</Text>
+        <Text style={styles.locatingSub}>
+          Connecting to your phone's satellites. Please tap "Allow" if your browser prompts for location.
+        </Text>
+
+        <TouchableOpacity
+          style={styles.retryGpsBtn}
+          onPress={onRequestLocation}
+          disabled={isLocating}
+        >
+          {isLocating ? (
+            <ActivityIndicator size="small" color="white" />
+          ) : (
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Ionicons name="locate" size={18} color="white" style={{ marginRight: 6 }} />
+              <Text style={styles.retryGpsText}>Detect My Exact Location</Text>
+            </View>
+          )}
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, style]}>
       <iframe
         ref={iframeRef}
         srcDoc={mapHtml}
-        allow="geolocation *"
         style={{
           width: '100%',
           height: '100%',
@@ -276,11 +280,13 @@ export default function WebMapFallback({
         title="Live Map"
       />
 
-      {/* Floating Status Badge */}
+      {/* Floating Live GPS Coordinates Badge */}
       <View style={styles.topBadge}>
-        <View style={[styles.dot, isPendingGps && { backgroundColor: '#F59E0B' }]} />
+        <View style={styles.dot} />
         <Text style={styles.badgeText}>
-          {isPendingGps ? 'Locating via GPS...' : 'Live GPS Connected'}
+          {focusCoords
+            ? `Sister: ${focusCoords.latitude.toFixed(4)}, ${focusCoords.longitude.toFixed(4)}`
+            : `Live GPS: ${userCoords?.latitude.toFixed(4)}, ${userCoords?.longitude.toFixed(4)}`}
         </Text>
       </View>
     </View>
@@ -296,13 +302,57 @@ const styles = StyleSheet.create({
     minHeight: 280,
     width: '100%',
   },
+  locatingContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+    backgroundColor: '#FFF7F8',
+    borderWidth: 1,
+    borderColor: '#FECDD3',
+  },
+  radarPulse: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#FFE4E6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  locatingTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#9F1239',
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+  locatingSub: {
+    fontSize: 12,
+    color: '#6B7280',
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 18,
+    maxWidth: 280,
+  },
+  retryGpsBtn: {
+    backgroundColor: '#D44D5C',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 14,
+    elevation: 2,
+  },
+  retryGpsText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 13,
+  },
   topBadge: {
     position: 'absolute',
     top: 12,
     left: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+    backgroundColor: 'rgba(15, 23, 42, 0.88)',
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 20,
@@ -320,5 +370,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 11,
     fontWeight: '600',
+    letterSpacing: 0.2,
   },
 });

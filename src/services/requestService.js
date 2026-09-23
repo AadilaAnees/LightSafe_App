@@ -42,8 +42,8 @@ export async function createRequest(type, coords) {
     requesterName: "Sister in Need",
     createdAt: serverTimestamp(),
     location: {
-      latitude: coords?.latitude ?? 6.9271,
-      longitude: coords?.longitude ?? 79.8612,
+      latitude: coords?.latitude,
+      longitude: coords?.longitude,
     },
   });
   return docRef.id;

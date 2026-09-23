@@ -20,61 +20,59 @@ export default function MapScreen({ navigation }) {
   const [accepting, setAccepting] = useState(null);
   const [activeSister, setActiveSister] = useState(null);
 
+  const [isLocating, setIsLocating] = useState(false);
+
+  const fetchLiveLoc = () => {
+    setIsLocating(true);
+    if (typeof navigator !== 'undefined' && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setIsLocating(false);
+          setUserLoc({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          });
+        },
+        () => {},
+        { enableHighAccuracy: false, timeout: 8000, maximumAge: 30000 }
+      );
+
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setIsLocating(false);
+          setUserLoc({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          });
+        },
+        () => { setIsLocating(false); },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    }
+  };
+
   // Acquire live continuous GPS
   useEffect(() => {
     let isMounted = true;
     let watchId = null;
-    const defaultCoords = { latitude: 6.9271, longitude: 79.8612 };
 
-    const startTracking = () => {
-      if (typeof navigator !== 'undefined' && navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            if (isMounted) {
-              setUserLoc({
-                latitude: pos.coords.latitude,
-                longitude: pos.coords.longitude,
-              });
-            }
-          },
-          (err) => {
-            console.warn('Map initial geolocation warning:', err.message);
-            if (isMounted) setUserLoc(defaultCoords);
-          },
-          { enableHighAccuracy: true, timeout: 5000, maximumAge: 1000 }
-        );
+    fetchLiveLoc();
 
-        watchId = navigator.geolocation.watchPosition(
-          (pos) => {
-            if (isMounted) {
-              setUserLoc({
-                latitude: pos.coords.latitude,
-                longitude: pos.coords.longitude,
-              });
-            }
-          },
-          (err) => console.warn('Map live tracking warning:', err.message),
-          { enableHighAccuracy: true, maximumAge: 2000 }
-        );
-        return;
-      }
-
-      (async () => {
-        try {
-          let { status } = await Location.requestForegroundPermissionsAsync();
-          if (status === 'granted') {
-            let loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-            if (isMounted) setUserLoc(loc.coords);
-            return;
+    if (typeof navigator !== 'undefined' && navigator.geolocation) {
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          if (isMounted) {
+            setUserLoc({
+              latitude: pos.coords.latitude,
+              longitude: pos.coords.longitude,
+            });
           }
-        } catch (e) {
-          console.warn('Map expo-location fallback:', e.message);
-        }
-        if (isMounted) setUserLoc(defaultCoords);
-      })();
-    };
+        },
+        (err) => console.warn('Map live tracking warning:', err.message),
+        { enableHighAccuracy: true, maximumAge: 2000 }
+      );
+    }
 
-    startTracking();
     return () => {
       isMounted = false;
       if (watchId !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
@@ -86,24 +84,25 @@ export default function MapScreen({ navigation }) {
   // Subscribe to pending requests from Firestore
   useEffect(() => {
     const unsubscribe = listenToPendingRequests((docs) => {
-      const activeLoc = userLoc || { latitude: 6.9271, longitude: 79.8612 };
-
       const filtered = docs
         .filter((req) => {
           if (!req.location) return false;
           if (req.requesterId === auth.currentUser?.uid) return false;
+          if (!userLoc) return true;
           const dist = getDistanceInKm(
-            activeLoc.latitude, activeLoc.longitude,
+            userLoc.latitude, userLoc.longitude,
             req.location.latitude, req.location.longitude
           );
           return dist <= 1000.0;
         })
         .map((req) => ({
           ...req,
-          distanceKm: getDistanceInKm(
-            activeLoc.latitude, activeLoc.longitude,
-            req.location.latitude, req.location.longitude
-          ),
+          distanceKm: userLoc
+            ? getDistanceInKm(
+                userLoc.latitude, userLoc.longitude,
+                req.location.latitude, req.location.longitude
+              )
+            : null,
         }));
       setNearbyRequests(filtered);
     });
@@ -135,7 +134,8 @@ export default function MapScreen({ navigation }) {
         userCoords={userLoc}
         focusCoords={activeSister?.location}
         requests={nearbyRequests}
-        onLocationDetected={setUserLoc}
+        onRequestLocation={fetchLiveLoc}
+        isLocating={isLocating}
         style={styles.map}
       />
 

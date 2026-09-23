@@ -27,63 +27,67 @@ export default function HomeScreen({ navigation }) {
   const [rating, setRating] = useState(5);
   const [feedbackText, setFeedbackText] = useState('');
 
+  const [isLocating, setIsLocating] = useState(false);
+
+  const fetchLiveLocation = () => {
+    setIsLocating(true);
+    if (typeof navigator !== 'undefined' && navigator.geolocation) {
+      // 1. Quick resolve via network/wifi (<1s)
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setIsLocating(false);
+          setUserCoords({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          });
+        },
+        (err) => {
+          console.warn('Initial quick geo warning:', err.message);
+        },
+        { enableHighAccuracy: false, timeout: 8000, maximumAge: 30000 }
+      );
+
+      // 2. High accuracy satellite GPS (<15s)
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setIsLocating(false);
+          setUserCoords({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          });
+        },
+        (err) => {
+          setIsLocating(false);
+          console.warn('High accuracy geo warning:', err.message);
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    }
+  };
+
   useEffect(() => {
     let isMounted = true;
     let watchId = null;
-    const defaultCoords = { latitude: 6.9271, longitude: 79.8612 };
 
-    const startLiveTracking = () => {
-      if (typeof navigator !== 'undefined' && navigator.geolocation) {
-        // Fast initial position
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            if (isMounted) {
-              setUserCoords({
-                latitude: pos.coords.latitude,
-                longitude: pos.coords.longitude,
-              });
-            }
-          },
-          (err) => {
-            console.warn('Initial geolocation warning:', err.message);
-            if (isMounted) setUserCoords(defaultCoords);
-          },
-          { enableHighAccuracy: true, timeout: 5000, maximumAge: 1000 }
-        );
+    // Start initial live position query
+    fetchLiveLocation();
 
-        // Continuous live GPS tracking (like Uber)
-        watchId = navigator.geolocation.watchPosition(
-          (pos) => {
-            if (isMounted) {
-              setUserCoords({
-                latitude: pos.coords.latitude,
-                longitude: pos.coords.longitude,
-              });
-            }
-          },
-          (err) => console.warn('Live tracking warning:', err.message),
-          { enableHighAccuracy: true, maximumAge: 2000 }
-        );
-        return;
-      }
-
-      // Fallback to expo-location if navigator.geolocation not found
-      (async () => {
-        try {
-          let { status } = await Location.requestForegroundPermissionsAsync();
-          if (status === 'granted') {
-            let loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-            if (isMounted) setUserCoords(loc.coords);
-            return;
+    // Continuous live tracking as user carries the phone
+    if (typeof navigator !== 'undefined' && navigator.geolocation) {
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          if (isMounted) {
+            setUserCoords({
+              latitude: pos.coords.latitude,
+              longitude: pos.coords.longitude,
+            });
           }
-        } catch (e) {
-          console.warn('Location fallback error:', e.message);
-        }
-        if (isMounted) setUserCoords(defaultCoords);
-      })();
-    };
+        },
+        (err) => console.warn('Live watch warning:', err.message),
+        { enableHighAccuracy: true, maximumAge: 2000 }
+      );
+    }
 
-    startLiveTracking();
     return () => {
       isMounted = false;
       if (watchId !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
@@ -115,10 +119,16 @@ export default function HomeScreen({ navigation }) {
 
   const handleInitiateHelp = (type = 'Need a Pad') => {
     setRequestType(type);
+    fetchLiveLocation();
     setFlowState('CONFIRM_LOCATION');
   };
 
   const handleConfirmLocation = async () => {
+    if (!userCoords) {
+      Alert.alert('Acquiring Location', 'Please wait a moment while your phone locks onto your live GPS.');
+      fetchLiveLocation();
+      return;
+    }
     setFlowState('SEARCHING');
     try {
       const requestId = await createRequest(requestType, userCoords);
@@ -217,15 +227,22 @@ export default function HomeScreen({ navigation }) {
           <Text style={styles.modalSubHeader}>Requesting: {requestType}</Text>
           <WebMapFallback
             userCoords={userCoords}
-            onLocationDetected={setUserCoords}
+            onRequestLocation={fetchLiveLocation}
+            isLocating={isLocating}
             style={styles.mapConfirmation}
           />
           <View style={styles.actionRow}>
             <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#E5E7EB' }]} onPress={() => setFlowState('IDLE')}>
               <Text style={{ color: '#374151', fontWeight: 'bold' }}>Cancel</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#D44D5C' }]} onPress={handleConfirmLocation}>
-              <Text style={{ color: 'white', fontWeight: 'bold' }}>Confirm Location</Text>
+            <TouchableOpacity
+              style={[styles.actionBtn, { backgroundColor: userCoords ? '#D44D5C' : '#9CA3AF' }]}
+              onPress={handleConfirmLocation}
+              disabled={!userCoords}
+            >
+              <Text style={{ color: 'white', fontWeight: 'bold' }}>
+                {userCoords ? 'Confirm Location' : 'Locating GPS...'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
