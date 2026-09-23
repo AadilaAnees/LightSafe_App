@@ -57,16 +57,22 @@ export default function HomeScreen({ navigation }) {
     return () => unsubscribe();
   }, [activeRequestId]);
 
+  const refreshLocation = () => {
+    trackLiveLocation((coords) => {
+      setUserCoords(coords);
+    });
+  };
+
   const handleInitiateHelp = (type = 'Need a Pad') => {
     setRequestType(type);
-    fetchLiveLocation();
+    refreshLocation();
     setFlowState('CONFIRM_LOCATION');
   };
 
   const handleConfirmLocation = async () => {
     if (!userCoords) {
       Alert.alert('Acquiring Location', 'Please wait a moment while your phone locks onto your live GPS.');
-      fetchLiveLocation();
+      refreshLocation();
       return;
     }
     setFlowState('SEARCHING');
@@ -167,8 +173,6 @@ export default function HomeScreen({ navigation }) {
           <Text style={styles.modalSubHeader}>Requesting: {requestType}</Text>
           <WebMapFallback
             userCoords={userCoords}
-            onRequestLocation={fetchLiveLocation}
-            isLocating={isLocating}
             style={styles.mapConfirmation}
           />
           <View style={styles.actionRow}>
