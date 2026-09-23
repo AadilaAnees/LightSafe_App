@@ -18,7 +18,16 @@
       }
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "output": "single",
+      "name": "LightSafe",
+      "shortName": "LightSafe",
+      "description": "Peer-to-peer menstrual safety assistance app",
+      "themeColor": "#D44D5C",
+      "backgroundColor": "#FAF9F6",
+      "display": "standalone",
+      "orientation": "portrait"
     }
   }
 }
+

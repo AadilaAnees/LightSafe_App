@@ -1,5 +1,6 @@
 import 'react-native-gesture-handler';
-import React from 'react';
+import React, { useEffect } from 'react';
+import { Platform } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -69,6 +70,18 @@ function MainTabNavigator() {
 }
 
 export default function App() {
+  // Register the PWA service worker on web platform only
+  useEffect(() => {
+    if (Platform.OS === 'web' && 'serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker
+          .register('/service-worker.js')
+          .then((reg) => console.log('[SW] Registered, scope:', reg.scope))
+          .catch((err) => console.warn('[SW] Registration failed:', err));
+      });
+    }
+  }, []);
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <NavigationContainer>

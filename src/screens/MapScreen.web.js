@@ -1,26 +1,22 @@
-﻿import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Platform } from 'react-native';
+﻿/**
+ * MapScreen.web.js
+ * Web-platform version of MapScreen — Metro picks this file on web builds
+ * instead of MapScreen.js, so react-native-maps is never bundled.
+ */
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert } from 'react-native';
 import * as Location from 'expo-location';
 import { getDistanceInKm } from '../utils/distance';
 import { listenToPendingRequests, acceptRequest } from '../services/requestService';
 import { auth } from '../services/firebase';
 import WebMapFallback from '../components/WebMapFallback';
 
-// Only import react-native-maps on native platforms — it has no web support.
-let MapView = null;
-let Marker = null;
-if (Platform.OS !== 'web') {
-  const Maps = require('react-native-maps');
-  MapView = Maps.default;
-  Marker = Maps.Marker;
-}
-
 export default function MapScreen({ navigation }) {
   const [userLoc, setUserLoc] = useState(null);
   const [nearbyRequests, setNearbyRequests] = useState([]);
-  const [accepting, setAccepting] = useState(null); // requestId being accepted
+  const [accepting, setAccepting] = useState(null);
 
-  // Acquire device location
+  // Acquire device location via expo-location (uses navigator.geolocation on web)
   useEffect(() => {
     (async () => {
       let { status } = await Location.requestForegroundPermissionsAsync();
@@ -34,43 +30,33 @@ export default function MapScreen({ navigation }) {
   useEffect(() => {
     const unsubscribe = listenToPendingRequests((docs) => {
       if (!userLoc) {
-        // Show all while GPS pending, filter when we have location
         setNearbyRequests(docs);
         return;
       }
-
       const filtered = docs
         .filter((req) => {
           if (!req.location) return false;
-          // Skip own requests
           if (req.requesterId === auth.currentUser?.uid) return false;
           const dist = getDistanceInKm(
-            userLoc.latitude,
-            userLoc.longitude,
-            req.location.latitude,
-            req.location.longitude
+            userLoc.latitude, userLoc.longitude,
+            req.location.latitude, req.location.longitude
           );
           return dist <= 1.0;
         })
         .map((req) => ({
           ...req,
           distanceKm: getDistanceInKm(
-            userLoc.latitude,
-            userLoc.longitude,
-            req.location.latitude,
-            req.location.longitude
+            userLoc.latitude, userLoc.longitude,
+            req.location.latitude, req.location.longitude
           ),
         }));
-
       setNearbyRequests(filtered);
     });
-
     return () => unsubscribe();
   }, [userLoc]);
 
-  // Accept a request atomically, then navigate to Chat as helper
   const handleAssist = async (item) => {
-    if (accepting) return; // prevent double-tap
+    if (accepting) return;
     setAccepting(item.id);
     try {
       await acceptRequest(item.id);
@@ -83,39 +69,10 @@ export default function MapScreen({ navigation }) {
     }
   };
 
-  const renderMap = () => {
-    if (!userLoc) {
-      return <View style={styles.loadingBox}><Text>Acquiring GPS Signal...</Text></View>;
-    }
-    if (Platform.OS === 'web') {
-      return <WebMapFallback userCoords={userLoc} style={styles.map} />;
-    }
-    return (
-      <MapView
-        style={styles.map}
-        initialRegion={{
-          latitude: userLoc.latitude,
-          longitude: userLoc.longitude,
-          latitudeDelta: 0.015,
-          longitudeDelta: 0.015,
-        }}
-      >
-        <Marker coordinate={userLoc} title="You are here" pinColor="blue" />
-        {nearbyRequests.map((req) => (
-          <Marker
-            key={req.id}
-            coordinate={req.location}
-            title={`Needs: ${req.type}`}
-            pinColor="red"
-          />
-        ))}
-      </MapView>
-    );
-  };
-
   return (
     <View style={styles.container}>
-      {renderMap()}
+      {/* Web map — OpenStreetMap iframe, no native dependency */}
+      <WebMapFallback userCoords={userLoc} style={styles.map} />
 
       {/* Sliding Sheet */}
       <View style={styles.sheet}>
@@ -155,8 +112,7 @@ export default function MapScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  map: { flex: 0.6 },
-  loadingBox: { flex: 0.6, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F3F4F6' },
+  map: { flex: 0.6, minHeight: 300 },
   sheet: { flex: 0.4, backgroundColor: 'white', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, elevation: 10 },
   sheetTitle: { fontSize: 16, fontWeight: 'bold', color: '#1F2937', marginBottom: 12 },
   emptyText: { color: '#888', fontStyle: 'italic', marginTop: 10 },

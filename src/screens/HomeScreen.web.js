@@ -1,20 +1,16 @@
-﻿import React, { useState, useEffect } from 'react';
+﻿/**
+ * HomeScreen.web.js
+ * Web-platform version of HomeScreen — Metro picks this on web builds.
+ * react-native-maps is never imported here; WebMapFallback is used instead.
+ */
+import React, { useState, useEffect } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  Alert,
-  Modal,
-  ActivityIndicator,
-  TextInput,
-  Platform,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView,
+  Alert, Modal, ActivityIndicator, TextInput,
 } from 'react-native';
 import * as Location from 'expo-location';
 import * as Linking from 'expo-linking';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-
 import {
   createRequest,
   listenToRequest,
@@ -22,17 +18,8 @@ import {
 } from '../services/requestService';
 import WebMapFallback from '../components/WebMapFallback';
 
-// Only import react-native-maps on native platforms — it has no web support.
-let MapView = null;
-let Marker = null;
-if (Platform.OS !== 'web') {
-  const Maps = require('react-native-maps');
-  MapView = Maps.default;
-  Marker = Maps.Marker;
-}
-
 export default function HomeScreen({ navigation }) {
-  const [flowState, setFlowState] = useState('IDLE'); // IDLE | CONFIRM_LOCATION | SEARCHING | ACCEPTED | FEEDBACK
+  const [flowState, setFlowState] = useState('IDLE');
   const [requestType, setRequestType] = useState('Instant Emergency');
   const [userCoords, setUserCoords] = useState(null);
   const [activeRequestId, setActiveRequestId] = useState(null);
@@ -40,7 +27,6 @@ export default function HomeScreen({ navigation }) {
   const [rating, setRating] = useState(5);
   const [feedbackText, setFeedbackText] = useState('');
 
-  // Fetch initial device location
   useEffect(() => {
     (async () => {
       let { status } = await Location.requestForegroundPermissionsAsync();
@@ -50,13 +36,10 @@ export default function HomeScreen({ navigation }) {
     })();
   }, []);
 
-  // Real-time listener for request status changes (requester side)
   useEffect(() => {
     if (!activeRequestId) return;
-
     const unsubscribe = listenToRequest(activeRequestId, (data) => {
       if (!data) {
-        // Document deleted (session ended by helper)
         setActiveRequestId(null);
         setHelperData(null);
         setFlowState('IDLE');
@@ -67,22 +50,18 @@ export default function HomeScreen({ navigation }) {
           name: data.helperName || 'Sister Volunteer',
           helperId: data.helperId,
           location: data.helperLocation || null,
-          distance: '~nearby',
         });
         setFlowState('ACCEPTED');
       }
     });
-
     return () => unsubscribe();
   }, [activeRequestId]);
 
-  // Step 1: Open location confirmation sheet
   const handleInitiateHelp = (type = 'Need a Pad') => {
     setRequestType(type);
     setFlowState('CONFIRM_LOCATION');
   };
 
-  // Step 2: Write request to Firestore & start listening
   const handleConfirmLocation = async () => {
     setFlowState('SEARCHING');
     try {
@@ -100,11 +79,8 @@ export default function HomeScreen({ navigation }) {
     Linking.openURL(`tel:${helperData.phone}`);
   };
 
-  // Step 3: Requester ends session — purge Firestore & show feedback
   const handleFinalizeFeedback = async () => {
-    if (activeRequestId) {
-      await deleteRequestSession(activeRequestId);
-    }
+    if (activeRequestId) await deleteRequestSession(activeRequestId);
     setActiveRequestId(null);
     setHelperData(null);
     setFeedbackText('');
@@ -113,70 +89,10 @@ export default function HomeScreen({ navigation }) {
     Alert.alert('Thank You!', 'Feedback submitted and active session wiped for your privacy.');
   };
 
-  // Cancel request while still searching
   const handleCancelSearch = async () => {
-    if (activeRequestId) {
-      await deleteRequestSession(activeRequestId);
-    }
+    if (activeRequestId) await deleteRequestSession(activeRequestId);
     setActiveRequestId(null);
     setFlowState('IDLE');
-  };
-
-  // -----------------------------------------------------------------------
-  // Map sub-components — guarded for web
-  // -----------------------------------------------------------------------
-  const renderConfirmMap = () => {
-    if (!userCoords) return null;
-    if (Platform.OS === 'web') {
-      return (
-        <WebMapFallback
-          userCoords={userCoords}
-          style={styles.mapConfirmation}
-        />
-      );
-    }
-    return (
-      <MapView
-        style={styles.mapConfirmation}
-        initialRegion={{
-          latitude: userCoords.latitude,
-          longitude: userCoords.longitude,
-          latitudeDelta: 0.005,
-          longitudeDelta: 0.005,
-        }}
-      >
-        <Marker coordinate={userCoords} title="Your Location" pinColor="#D44D5C" />
-      </MapView>
-    );
-  };
-
-  const renderTrackingMap = () => {
-    if (!userCoords) return null;
-    if (Platform.OS === 'web') {
-      return (
-        <WebMapFallback
-          userCoords={userCoords}
-          helperCoords={helperData?.location}
-          style={{ flex: 1 }}
-        />
-      );
-    }
-    return (
-      <MapView
-        style={{ flex: 1 }}
-        initialRegion={{
-          latitude: userCoords.latitude,
-          longitude: userCoords.longitude,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
-        }}
-      >
-        <Marker coordinate={userCoords} title="You" pinColor="blue" />
-        {helperData?.location && (
-          <Marker coordinate={helperData.location} title={helperData.name} pinColor="green" />
-        )}
-      </MapView>
-    );
   };
 
   return (
@@ -184,29 +100,20 @@ export default function HomeScreen({ navigation }) {
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
 
         <View style={styles.header}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <View style={{ marginLeft: 0 }}>
-              <Text style={styles.greeting}>Hi Hiruni,</Text>
-              <Text style={styles.welcomeText}>Welcome Back!</Text>
-            </View>
+          <View>
+            <Text style={styles.greeting}>Hi Hiruni,</Text>
+            <Text style={styles.welcomeText}>Welcome Back!</Text>
           </View>
           <TouchableOpacity
             style={[styles.bellBtn, helperData && styles.bellBtnActive]}
-            onPress={() => {
-              if (helperData) setFlowState('ACCEPTED');
-              else Alert.alert('Notifications', 'No active help requests.');
-            }}
+            onPress={() => helperData ? setFlowState('ACCEPTED') : Alert.alert('Notifications', 'No active help requests.')}
           >
             <Ionicons name="notifications-outline" size={20} color={helperData ? '#EF4444' : '#374151'} />
           </TouchableOpacity>
         </View>
 
         {helperData && (
-          <TouchableOpacity
-            style={styles.activeBanner}
-            onPress={() => setFlowState('ACCEPTED')}
-            activeOpacity={0.85}
-          >
+          <TouchableOpacity style={styles.activeBanner} onPress={() => setFlowState('ACCEPTED')} activeOpacity={0.85}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <View style={styles.pulseDot} />
               <View style={{ marginLeft: 10 }}>
@@ -252,7 +159,7 @@ export default function HomeScreen({ navigation }) {
         <View style={styles.modalContainer}>
           <Text style={styles.modalHeader}>Confirm Your Pickup Location</Text>
           <Text style={styles.modalSubHeader}>Requesting: {requestType}</Text>
-          {renderConfirmMap()}
+          <WebMapFallback userCoords={userCoords} style={styles.mapConfirmation} />
           <View style={styles.actionRow}>
             <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#E5E7EB' }]} onPress={() => setFlowState('IDLE')}>
               <Text style={{ color: '#374151', fontWeight: 'bold' }}>Cancel</Text>
@@ -294,7 +201,7 @@ export default function HomeScreen({ navigation }) {
             <Text style={styles.trackingTitle}>Live Assistance</Text>
             <View style={{ width: 60 }} />
           </View>
-          {renderTrackingMap()}
+          <WebMapFallback userCoords={userCoords} helperCoords={helperData?.location} style={{ flex: 1 }} />
           <View style={styles.bottomSheetCard}>
             <Text style={styles.matchTitle}>Helper Connected!</Text>
             <Text style={styles.matchSub}>{helperData?.name} is on her way.</Text>
@@ -330,12 +237,7 @@ export default function HomeScreen({ navigation }) {
             <View style={styles.starRow}>
               {[1, 2, 3, 4, 5].map((star) => (
                 <TouchableOpacity key={star} onPress={() => setRating(star)}>
-                  <Ionicons
-                    name={rating >= star ? 'star' : 'star-outline'}
-                    size={32}
-                    color={rating >= star ? '#F59E0B' : '#D1D5DB'}
-                    style={{ marginHorizontal: 4 }}
-                  />
+                  <Ionicons name={rating >= star ? 'star' : 'star-outline'} size={32} color={rating >= star ? '#F59E0B' : '#D1D5DB'} style={{ marginHorizontal: 4 }} />
                 </TouchableOpacity>
               ))}
             </View>
@@ -381,7 +283,7 @@ const styles = StyleSheet.create({
   modalContainer: { flex: 1, padding: 20, paddingTop: 60, backgroundColor: 'white' },
   modalHeader: { fontSize: 22, fontWeight: 'bold', color: '#1F2937', textAlign: 'center' },
   modalSubHeader: { fontSize: 14, color: '#D44D5C', textAlign: 'center', marginBottom: 20, marginTop: 5 },
-  mapConfirmation: { flex: 1, borderRadius: 16, marginBottom: 20 },
+  mapConfirmation: { flex: 1, borderRadius: 16, marginBottom: 20, minHeight: 250 },
   actionRow: { flexDirection: 'row', justifyContent: 'space-between' },
   actionBtn: { flex: 0.48, padding: 16, borderRadius: 12, alignItems: 'center' },
   searchingOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 },
