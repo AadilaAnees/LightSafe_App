@@ -16,13 +16,15 @@ export default function MapScreen({ navigation }) {
   const [nearbyRequests, setNearbyRequests] = useState([]);
   const [accepting, setAccepting] = useState(null);
 
-  // Acquire device location with browser geolocation & instant fallback
+  // Acquire device location with continuous live GPS tracking
   useEffect(() => {
     let isMounted = true;
+    let watchId = null;
     const defaultCoords = { latitude: 6.9271, longitude: 79.8612 };
 
-    const fetchLoc = async () => {
+    const startTracking = () => {
       if (typeof navigator !== 'undefined' && navigator.geolocation) {
+        // Instant fix
         navigator.geolocation.getCurrentPosition(
           (pos) => {
             if (isMounted) {
@@ -33,29 +35,50 @@ export default function MapScreen({ navigation }) {
             }
           },
           (err) => {
-            console.warn('Map browser geolocation fallback:', err.message);
+            console.warn('Map initial geolocation warning:', err.message);
             if (isMounted) setUserLoc(defaultCoords);
           },
-          { enableHighAccuracy: true, timeout: 6000, maximumAge: 10000 }
+          { enableHighAccuracy: true, timeout: 5000, maximumAge: 1000 }
+        );
+
+        // Live continuous tracking
+        watchId = navigator.geolocation.watchPosition(
+          (pos) => {
+            if (isMounted) {
+              setUserLoc({
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude,
+              });
+            }
+          },
+          (err) => console.warn('Map live tracking warning:', err.message),
+          { enableHighAccuracy: true, maximumAge: 2000 }
         );
         return;
       }
 
-      try {
-        let { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          let loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          if (isMounted) setUserLoc(loc.coords);
-          return;
+      (async () => {
+        try {
+          let { status } = await Location.requestForegroundPermissionsAsync();
+          if (status === 'granted') {
+            let loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+            if (isMounted) setUserLoc(loc.coords);
+            return;
+          }
+        } catch (e) {
+          console.warn('Map expo-location fallback:', e.message);
         }
-      } catch (e) {
-        console.warn('Map expo-location fallback:', e.message);
-      }
-      if (isMounted) setUserLoc(defaultCoords);
+        if (isMounted) setUserLoc(defaultCoords);
+      })();
     };
 
-    fetchLoc();
-    return () => { isMounted = false; };
+    startTracking();
+    return () => {
+      isMounted = false;
+      if (watchId !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+    };
   }, []);
 
   // Subscribe to pending requests from Firestore (helper side)
@@ -102,17 +125,17 @@ export default function MapScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
-      {/* Web map — OpenStreetMap iframe, no native dependency */}
-      <WebMapFallback userCoords={userLoc} style={styles.map} />
+      {/* Web map — Uber-style live map with requests */}
+      <WebMapFallback userCoords={userLoc} requests={nearbyRequests} style={styles.map} />
 
       {/* Sliding Sheet */}
       <View style={styles.sheet}>
-        <Text style={styles.sheetTitle}>Sisters Needing Help Nearby (&lt;1km)</Text>
+        <Text style={styles.sheetTitle}>Sisters Needing Help Nearby</Text>
         <FlatList
           data={nearbyRequests}
           keyExtractor={(item) => item.id}
           ListEmptyComponent={
-            <Text style={styles.emptyText}>No active requests within 1km radius.</Text>
+            <Text style={styles.emptyText}>No active requests within range.</Text>
           }
           renderItem={({ item }) => (
             <View style={styles.requestCard}>
@@ -142,7 +165,7 @@ export default function MapScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  container: { flex: 1, paddingBottom: 65 },
   map: { flex: 0.6, minHeight: 300 },
   sheet: { flex: 0.4, backgroundColor: 'white', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, elevation: 10 },
   sheetTitle: { fontSize: 16, fontWeight: 'bold', color: '#1F2937', marginBottom: 12 },

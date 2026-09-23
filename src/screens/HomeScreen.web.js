@@ -29,11 +29,12 @@ export default function HomeScreen({ navigation }) {
 
   useEffect(() => {
     let isMounted = true;
+    let watchId = null;
     const defaultCoords = { latitude: 6.9271, longitude: 79.8612 };
 
-    const fetchLocation = async () => {
-      // 1. Direct browser geolocation for web/Safari/Chrome
+    const startLiveTracking = () => {
       if (typeof navigator !== 'undefined' && navigator.geolocation) {
+        // Fast initial position
         navigator.geolocation.getCurrentPosition(
           (pos) => {
             if (isMounted) {
@@ -44,30 +45,51 @@ export default function HomeScreen({ navigation }) {
             }
           },
           (err) => {
-            console.warn('Browser geolocation fallback:', err.message);
+            console.warn('Initial geolocation warning:', err.message);
             if (isMounted) setUserCoords(defaultCoords);
           },
-          { enableHighAccuracy: true, timeout: 6000, maximumAge: 10000 }
+          { enableHighAccuracy: true, timeout: 5000, maximumAge: 1000 }
+        );
+
+        // Continuous live GPS tracking (like Uber)
+        watchId = navigator.geolocation.watchPosition(
+          (pos) => {
+            if (isMounted) {
+              setUserCoords({
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude,
+              });
+            }
+          },
+          (err) => console.warn('Live tracking warning:', err.message),
+          { enableHighAccuracy: true, maximumAge: 2000 }
         );
         return;
       }
 
-      // 2. Fallback to expo-location
-      try {
-        let { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          let loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          if (isMounted) setUserCoords(loc.coords);
-          return;
+      // Fallback to expo-location if navigator.geolocation not found
+      (async () => {
+        try {
+          let { status } = await Location.requestForegroundPermissionsAsync();
+          if (status === 'granted') {
+            let loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+            if (isMounted) setUserCoords(loc.coords);
+            return;
+          }
+        } catch (e) {
+          console.warn('Location fallback error:', e.message);
         }
-      } catch (e) {
-        console.warn('expo-location fallback:', e.message);
-      }
-      if (isMounted) setUserCoords(defaultCoords);
+        if (isMounted) setUserCoords(defaultCoords);
+      })();
     };
 
-    fetchLocation();
-    return () => { isMounted = false; };
+    startLiveTracking();
+    return () => {
+      isMounted = false;
+      if (watchId !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -296,7 +318,7 @@ export default function HomeScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FAF9F6' },
-  content: { padding: 18, paddingTop: 30, paddingBottom: 90 },
+  content: { paddingHorizontal: 24, paddingTop: 45, paddingBottom: 110 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
   greeting: { fontSize: 16, color: '#666' },
   welcomeText: { fontSize: 24, fontWeight: 'bold', color: '#1F2937' },

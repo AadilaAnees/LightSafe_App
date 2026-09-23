@@ -32,6 +32,30 @@ import PharmaciesScreen from './src/screens/PharmaciesScreen';
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
 
+// Inject global styles on web to ensure full viewport height and prevent middle-screen floating
+if (Platform.OS === 'web' && typeof document !== 'undefined') {
+  const styleId = 'lightsafe-web-root-styles';
+  if (!document.getElementById(styleId)) {
+    const styleTag = document.createElement('style');
+    styleTag.id = styleId;
+    styleTag.textContent = `
+      html, body, #root {
+        height: 100% !important;
+        min-height: 100% !important;
+        min-height: -webkit-fill-available !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        background-color: #FAF9F6 !important;
+      }
+      #root {
+        display: flex !important;
+        flex-direction: column !important;
+      }
+    `;
+    document.head.appendChild(styleTag);
+  }
+}
+
 function MainTabNavigator() {
   const isWeb = Platform.OS === 'web';
   return (
@@ -42,12 +66,17 @@ function MainTabNavigator() {
         tabBarInactiveTintColor: '#9CA3AF',
         tabBarStyle: isWeb
           ? {
+              position: 'fixed',
+              bottom: 0,
+              left: 0,
+              right: 0,
               backgroundColor: '#FFFFFF',
               borderTopWidth: 1,
               borderTopColor: '#E5E7EB',
-              height: 60,
-              paddingBottom: 6,
-              paddingTop: 6,
+              height: 65,
+              paddingBottom: 10,
+              paddingTop: 8,
+              zIndex: 9999,
             }
           : {
               position: 'absolute',
