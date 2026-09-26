@@ -1,4 +1,4 @@
-﻿// metro.config.js
+// metro.config.js
 // Ensures Metro resolves platform-specific files (.web.js) before generic .js
 // This prevents react-native-maps from being bundled on web.
 const { getDefaultConfig } = require("expo/metro-config");

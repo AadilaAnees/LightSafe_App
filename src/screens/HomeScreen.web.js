@@ -2,24 +2,38 @@
  * HomeScreen.web.js
  * Web-platform version of HomeScreen — Metro picks this on web builds.
  * react-native-maps is never imported here; WebMapFallback is used instead.
+ * Includes:
+ * - Instant dashboard popup when another woman nearby requests help
+ * - Feedback redirection from chat & two-sided completion
  */
 import React, { useState, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  Alert, Modal, ActivityIndicator, TextInput,
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  ScrollView,
+  Alert,
+  Modal,
+  ActivityIndicator,
+  TextInput,
 } from 'react-native';
-import * as Location from 'expo-location';
 import * as Linking from 'expo-linking';
 import { Ionicons, Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import {
   createRequest,
   listenToRequest,
+  listenToPendingRequests,
+  acceptRequest,
+  markRequesterCompleted,
   deleteRequestSession,
 } from '../services/requestService';
 import { trackLiveLocation } from '../utils/geolocation';
+import { getDistanceInKm } from '../utils/distance';
+import { auth } from '../services/firebase';
 import WebMapFallback from '../components/WebMapFallback';
 
-export default function HomeScreen({ navigation }) {
+export default function HomeScreen({ navigation, route }) {
   const [flowState, setFlowState] = useState('IDLE');
   const [requestType, setRequestType] = useState('Instant Emergency');
   const [userCoords, setUserCoords] = useState(null);
@@ -27,6 +41,10 @@ export default function HomeScreen({ navigation }) {
   const [helperData, setHelperData] = useState(null);
   const [rating, setRating] = useState(5);
   const [feedbackText, setFeedbackText] = useState('');
+
+  // Dashboard popup for incoming help requests from other sisters
+  const [incomingRequest, setIncomingRequest] = useState(null);
+  const [dismissedRequests, setDismissedRequests] = useState({});
 
   // Continuous live GPS tracking with instant resolution
   useEffect(() => {
@@ -36,6 +54,20 @@ export default function HomeScreen({ navigation }) {
     return cancel;
   }, []);
 
+  // Handle incoming feedback redirect from ChatScreen
+  useEffect(() => {
+    if (route?.params?.openFeedback) {
+      if (route.params.requestId) {
+        setActiveRequestId(route.params.requestId);
+      }
+      setHelperData({
+        name: route.params.helperName || 'Sister Volunteer',
+      });
+      setFlowState('FEEDBACK');
+    }
+  }, [route?.params]);
+
+  // Real-time listener for current user's own request
   useEffect(() => {
     if (!activeRequestId) return;
     const unsubscribe = listenToRequest(activeRequestId, (data) => {
@@ -56,6 +88,47 @@ export default function HomeScreen({ navigation }) {
     });
     return () => unsubscribe();
   }, [activeRequestId]);
+
+  // Real-time listener for nearby pending requests to show dashboard popup
+  useEffect(() => {
+    const unsubscribe = listenToPendingRequests((docs) => {
+      const now = Date.now();
+      const twoHoursAgo = now - 2 * 60 * 60 * 1000;
+
+      const validNearby = docs
+        .filter((req) => {
+          if (!req.location) return false;
+          // Don't show own request as incoming popup
+          if (req.requesterId === auth.currentUser?.uid) return false;
+          // Don't show if dismissed in this session
+          if (dismissedRequests[req.id]) return false;
+          // Stale filter
+          if (req.createdAt?.toMillis && req.createdAt.toMillis() < twoHoursAgo) return false;
+          return true;
+        })
+        .map((req) => {
+          const dist = userCoords
+            ? getDistanceInKm(
+                userCoords.latitude,
+                userCoords.longitude,
+                req.location.latitude,
+                req.location.longitude
+              )
+            : null;
+          return { ...req, distanceKm: dist };
+        })
+        .filter((req) => req.distanceKm === null || req.distanceKm <= 50.0);
+
+      // Show first nearby request if user is not currently in active requesting flow
+      if (validNearby.length > 0 && flowState === 'IDLE') {
+        setIncomingRequest(validNearby[0]);
+      } else if (validNearby.length === 0) {
+        setIncomingRequest(null);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [userCoords, dismissedRequests, flowState]);
 
   const refreshLocation = () => {
     trackLiveLocation((coords) => {
@@ -91,8 +164,28 @@ export default function HomeScreen({ navigation }) {
     Linking.openURL(`tel:${helperData.phone}`);
   };
 
+  // Requester taps "Help Received" from live tracking modal
+  const handleRequesterReceivedOnMap = async () => {
+    if (activeRequestId) {
+      try {
+        await markRequesterCompleted(activeRequestId);
+      } catch (e) {
+        console.warn('markRequesterCompleted error:', e);
+      }
+    }
+    setFlowState('FEEDBACK');
+  };
+
+  // Submit feedback and finalize session
   const handleFinalizeFeedback = async () => {
-    if (activeRequestId) await deleteRequestSession(activeRequestId);
+    if (activeRequestId) {
+      try {
+        await markRequesterCompleted(activeRequestId);
+        await deleteRequestSession(activeRequestId);
+      } catch (e) {
+        console.warn('Feedback finalization notice:', e);
+      }
+    }
     setActiveRequestId(null);
     setHelperData(null);
     setFeedbackText('');
@@ -107,20 +200,60 @@ export default function HomeScreen({ navigation }) {
     setFlowState('IDLE');
   };
 
+  // Helper actions from Dashboard Popup
+  const handleQuickAssistFromDashboard = async () => {
+    if (!incomingRequest) return;
+    const req = incomingRequest;
+    try {
+      await acceptRequest(req.id);
+      setIncomingRequest(null);
+      navigation.navigate('Chat', {
+        requestId: req.id,
+        role: 'helper',
+      });
+    } catch (err) {
+      console.warn('Dashboard quick assist failed:', err);
+      Alert.alert('Notice', 'Could not accept request. It may have already been assisted.');
+      setIncomingRequest(null);
+    }
+  };
+
+  const handleViewOnMapFromDashboard = () => {
+    setIncomingRequest(null);
+    navigation.navigate('Map');
+  };
+
+  const handleDismissDashboardAlert = () => {
+    if (incomingRequest) {
+      setDismissedRequests((prev) => ({ ...prev, [incomingRequest.id]: true }));
+      setIncomingRequest(null);
+    }
+  };
+
   return (
     <View style={{ flex: 1 }}>
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-
         <View style={styles.header}>
           <View>
             <Text style={styles.greeting}>Hi Hiruni,</Text>
             <Text style={styles.welcomeText}>Welcome Back!</Text>
           </View>
           <TouchableOpacity
-            style={[styles.bellBtn, helperData && styles.bellBtnActive]}
-            onPress={() => helperData ? setFlowState('ACCEPTED') : Alert.alert('Notifications', 'No active help requests.')}
+            style={[styles.bellBtn, (helperData || incomingRequest) && styles.bellBtnActive]}
+            onPress={() => {
+              if (helperData) setFlowState('ACCEPTED');
+              else if (incomingRequest) {
+                // Keep incomingRequest visible
+              } else {
+                Alert.alert('Notifications', 'No active alerts right now.');
+              }
+            }}
           >
-            <Ionicons name="notifications-outline" size={20} color={helperData ? '#EF4444' : '#374151'} />
+            <Ionicons
+              name="notifications-outline"
+              size={20}
+              color={helperData || incomingRequest ? '#EF4444' : '#374151'}
+            />
           </TouchableOpacity>
         </View>
 
@@ -163,8 +296,64 @@ export default function HomeScreen({ navigation }) {
             <Text style={styles.sosSubtext}>Tap to request immediate assistance</Text>
           </TouchableOpacity>
         </View>
-
       </ScrollView>
+
+      {/* DASHBOARD POPUP: INCOMING HELP REQUEST FROM NEARBY SISTER */}
+      <Modal visible={!!incomingRequest && flowState === 'IDLE'} transparent animationType="fade">
+        <View style={styles.searchingOverlay}>
+          <View style={styles.incomingPopupCard}>
+            <View style={styles.popupHeaderRow}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <View style={styles.pulseDot} />
+                <Text style={styles.popupAlertTitle}>Sister Nearby Needs Help!</Text>
+              </View>
+              <TouchableOpacity onPress={handleDismissDashboardAlert} style={{ padding: 4 }}>
+                <Ionicons name="close" size={20} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.popupBadgeRow}>
+              <View style={styles.popupBadge}>
+                <Text style={styles.popupBadgeText}>{incomingRequest?.type}</Text>
+              </View>
+              <Text style={styles.popupDistText}>
+                {incomingRequest?.distanceKm
+                  ? `📍 ~${(incomingRequest.distanceKm * 1000).toFixed(0)}m away`
+                  : '📍 In your area'}
+              </Text>
+            </View>
+
+            <Text style={styles.popupDesc}>
+              A sister nearby needs immediate discreet assistance. Can you help her out?
+            </Text>
+
+            <View style={styles.popupActionRow}>
+              <TouchableOpacity
+                style={styles.popupAssistBtn}
+                onPress={handleQuickAssistFromDashboard}
+              >
+                <Ionicons name="chatbubbles" size={16} color="white" style={{ marginRight: 6 }} />
+                <Text style={styles.popupAssistBtnText}>Help Her & Chat</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.popupMapBtn}
+                onPress={handleViewOnMapFromDashboard}
+              >
+                <Ionicons name="map" size={16} color="#D44D5C" style={{ marginRight: 4 }} />
+                <Text style={styles.popupMapBtnText}>View Map</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              style={styles.popupDismissBtn}
+              onPress={handleDismissDashboardAlert}
+            >
+              <Text style={styles.popupDismissText}>Dismiss for now</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* MODAL 1: CONFIRM LOCATION */}
       <Modal visible={flowState === 'CONFIRM_LOCATION'} animationType="slide">
@@ -247,7 +436,7 @@ export default function HomeScreen({ navigation }) {
                 <Text style={styles.btnIconText}>Chat</Text>
               </TouchableOpacity>
             </View>
-            <TouchableOpacity style={styles.resolvedBtn} onPress={() => setFlowState('FEEDBACK')}>
+            <TouchableOpacity style={styles.resolvedBtn} onPress={handleRequesterReceivedOnMap}>
               <Text style={styles.resolvedText}>Help Received (Rate & End)</Text>
             </TouchableOpacity>
           </View>
@@ -281,7 +470,6 @@ export default function HomeScreen({ navigation }) {
           </View>
         </View>
       </Modal>
-
     </View>
   );
 }
@@ -335,4 +523,99 @@ const styles = StyleSheet.create({
   starRow: { flexDirection: 'row', marginBottom: 15 },
   feedbackInput: { width: '100%', backgroundColor: '#F3F4F6', borderRadius: 12, padding: 12, fontSize: 13, color: '#1F2937', marginBottom: 15 },
   submitFeedbackBtn: { backgroundColor: '#D44D5C', padding: 14, borderRadius: 12, width: '100%', alignItems: 'center' },
+  // Dashboard incoming popup styles
+  incomingPopupCard: {
+    backgroundColor: 'white',
+    borderRadius: 22,
+    padding: 22,
+    width: '100%',
+    maxWidth: 400,
+    elevation: 8,
+    borderWidth: 2,
+    borderColor: '#FCA5A5',
+  },
+  popupHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  popupAlertTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#991B1B',
+    marginLeft: 8,
+  },
+  popupBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  popupBadge: {
+    backgroundColor: '#FEE2E2',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    marginRight: 10,
+  },
+  popupBadgeText: {
+    color: '#D44D5C',
+    fontWeight: 'bold',
+    fontSize: 13,
+  },
+  popupDistText: {
+    color: '#4B5563',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  popupDesc: {
+    fontSize: 13,
+    color: '#374151',
+    lineHeight: 18,
+    marginBottom: 18,
+  },
+  popupActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  popupAssistBtn: {
+    flex: 0.62,
+    backgroundColor: '#D44D5C',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  popupAssistBtnText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 13,
+  },
+  popupMapBtn: {
+    flex: 0.34,
+    borderWidth: 1.5,
+    borderColor: '#D44D5C',
+    backgroundColor: '#FFF5F7',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  popupMapBtnText: {
+    color: '#D44D5C',
+    fontWeight: 'bold',
+    fontSize: 13,
+  },
+  popupDismissBtn: {
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  popupDismissText: {
+    color: '#9CA3AF',
+    fontSize: 12,
+    textDecorationLine: 'underline',
+  },
 });

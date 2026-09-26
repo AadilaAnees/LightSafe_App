@@ -4,15 +4,24 @@
  * - Filters out stale/old requests (shows only real recent active requests).
  * - Instant GPS tracking on mobile.
  * - Shows sister location first, with prominent Chat button.
+ * - Two-sided completion: reacts instantly when requester confirms help received or cancels.
  */
 
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { getDistanceInKm } from '../utils/distance';
 import { trackLiveLocation } from '../utils/geolocation';
-import { listenToPendingRequests, acceptRequest } from '../services/requestService';
+import {
+  listenToPendingRequests,
+  acceptRequest,
+  listenToRequest,
+  markHelperCompleted,
+  cancelRequest,
+  deleteRequestSession,
+} from '../services/requestService';
 import { auth } from '../services/firebase';
+import { addKindnessPoints } from '../utils/rewardsStorage';
 import WebMapFallback from '../components/WebMapFallback';
 
 export default function MapScreen({ navigation }) {
@@ -20,6 +29,8 @@ export default function MapScreen({ navigation }) {
   const [nearbyRequests, setNearbyRequests] = useState([]);
   const [accepting, setAccepting] = useState(null);
   const [activeSister, setActiveSister] = useState(null);
+  const [delivering, setDelivering] = useState(false);
+  const isFinalizingRef = useRef(false);
 
   // Live GPS tracking on mobile
   useEffect(() => {
@@ -68,6 +79,44 @@ export default function MapScreen({ navigation }) {
     return () => unsubscribe();
   }, [userLoc]);
 
+  // Subscribe to real-time status of the currently assisted sister
+  useEffect(() => {
+    if (!activeSister?.id) return;
+    isFinalizingRef.current = false;
+
+    const unsubscribe = listenToRequest(activeSister.id, async (req) => {
+      if (isFinalizingRef.current) return;
+
+      if (!req) {
+        // Document deleted or purged -> sister found help or closed session
+        Alert.alert('Notice', 'The sister received help or the session was ended.');
+        setActiveSister(null);
+        return;
+      }
+
+      if (req.status === 'cancelled') {
+        Alert.alert('Notice', 'The sister cancelled this request or found another helper.');
+        setActiveSister(null);
+        return;
+      }
+
+      // Check if both completed
+      if (req.status === 'completed' || (req.requesterCompleted && req.helperCompleted)) {
+        isFinalizingRef.current = true;
+        await addKindnessPoints(50);
+        await deleteRequestSession(activeSister.id);
+        setActiveSister(null);
+        navigation.navigate('HelperCompletion');
+        return;
+      }
+
+      // Update active sister with latest info (e.g. requesterCompleted flag)
+      setActiveSister((prev) => (prev ? { ...prev, ...req } : null));
+    });
+
+    return () => unsubscribe();
+  }, [activeSister?.id, navigation]);
+
   // When helper clicks View on Map: focus her location
   const handleViewOnMap = (item) => {
     setActiveSister(item);
@@ -88,6 +137,57 @@ export default function MapScreen({ navigation }) {
     } finally {
       setAccepting(null);
     }
+  };
+
+  // When helper marks delivered from MapScreen
+  const handleMarkDelivered = async () => {
+    if (!activeSister?.id || delivering || isFinalizingRef.current) return;
+    setDelivering(true);
+    try {
+      const { bothCompleted } = await markHelperCompleted(activeSister.id);
+      if (bothCompleted || activeSister.requesterCompleted) {
+        isFinalizingRef.current = true;
+        await addKindnessPoints(50);
+        await deleteRequestSession(activeSister.id);
+        setActiveSister(null);
+        navigation.navigate('HelperCompletion');
+      } else {
+        Alert.alert(
+          'Marked as Delivered!',
+          'Great job! Once the sister confirms "Help Received", your 50 Kindness Points will be awarded and session finalized.'
+        );
+      }
+    } catch (err) {
+      console.warn('handleMarkDelivered error:', err.message);
+      Alert.alert('Notice', 'Could not record delivery. Please try again.');
+    } finally {
+      setDelivering(false);
+    }
+  };
+
+  // Helper cancels assisting this sister
+  const handleCancelAssistance = () => {
+    if (!activeSister?.id) return;
+    Alert.alert(
+      'Cancel Assistance?',
+      'Are you unable to assist? This will return the request to the map so another nearby sister can help.',
+      [
+        { text: 'Keep Assisting', style: 'cancel' },
+        {
+          text: 'Yes, Cancel',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await cancelRequest(activeSister.id, 'helper');
+              setActiveSister(null);
+            } catch (e) {
+              console.warn('Cancel error:', e);
+              setActiveSister(null);
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -111,9 +211,19 @@ export default function MapScreen({ navigation }) {
                 <Text style={styles.sisterPanelTitle}>Assisting Sister</Text>
               </View>
               <TouchableOpacity onPress={() => setActiveSister(null)} style={{ padding: 4 }}>
-                <Text style={styles.closeActiveText}>✕ Back</Text>
+                <Text style={styles.closeActiveText}>✕ Hide</Text>
               </TouchableOpacity>
             </View>
+
+            {/* If sister has confirmed help received, highlight notice */}
+            {activeSister.requesterCompleted && (
+              <View style={styles.requesterDoneBanner}>
+                <Ionicons name="checkmark-circle" size={16} color="#065F46" style={{ marginRight: 6 }} />
+                <Text style={styles.requesterDoneText}>
+                  Sister confirmed help received! Tap below to finish & claim 50 points.
+                </Text>
+              </View>
+            )}
 
             <View style={styles.sisterInfoBox}>
               <Text style={styles.sisterNeedLabel}>Emergency Need:</Text>
@@ -140,11 +250,40 @@ export default function MapScreen({ navigation }) {
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.completeActionBtn}
-                onPress={() => navigation.navigate('HelperCompletion')}
+                style={[
+                  styles.completeActionBtn,
+                  activeSister.requesterCompleted && styles.completeActionBtnActive,
+                ]}
+                onPress={handleMarkDelivered}
+                disabled={delivering}
               >
-                <Ionicons name="checkmark-done" size={18} color="#10B981" style={{ marginRight: 6 }} />
-                <Text style={styles.completeActionText}>Mark Help Delivered</Text>
+                {delivering ? (
+                  <ActivityIndicator size="small" color="#10B981" />
+                ) : (
+                  <>
+                    <Ionicons
+                      name="checkmark-done"
+                      size={18}
+                      color={activeSister.requesterCompleted ? 'white' : '#10B981'}
+                      style={{ marginRight: 6 }}
+                    />
+                    <Text
+                      style={[
+                        styles.completeActionText,
+                        activeSister.requesterCompleted && { color: 'white' },
+                      ]}
+                    >
+                      {activeSister.requesterCompleted ? 'Finish & Claim 50 Points' : 'Mark Help Delivered'}
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.cancelAssistBtn}
+                onPress={handleCancelAssistance}
+              >
+                <Text style={styles.cancelAssistText}>Can't Assist? Cancel</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -258,62 +397,73 @@ const styles = StyleSheet.create({
   },
   reqType: { fontSize: 14, fontWeight: 'bold', color: '#D44D5C' },
   reqDist: { fontSize: 11, color: '#666', marginTop: 2 },
-  btnRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  btnRow: { flexDirection: 'row', alignItems: 'center' },
   viewMapBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FCE7F3',
-    paddingVertical: 8,
+    paddingVertical: 7,
     paddingHorizontal: 10,
-    borderRadius: 14,
+    backgroundColor: '#FEE2E2',
+    borderRadius: 8,
+    marginRight: 8,
   },
-  viewMapText: { color: '#D44D5C', fontWeight: 'bold', fontSize: 12 },
+  viewMapText: { color: '#D44D5C', fontSize: 12, fontWeight: 'bold' },
   assistBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#10B981',
-    paddingVertical: 8,
+    paddingVertical: 7,
     paddingHorizontal: 12,
-    borderRadius: 14,
+    backgroundColor: '#D44D5C',
+    borderRadius: 8,
   },
-  assistText: { color: 'white', fontWeight: 'bold', fontSize: 12 },
-
-  // Active Sister Helping Panel
+  assistText: { color: 'white', fontSize: 12, fontWeight: 'bold' },
   sisterPanel: { flex: 1, justifyContent: 'space-between' },
-  sisterHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  pulseDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: '#10B981', marginRight: 6 },
-  sisterPanelTitle: { fontSize: 15, fontWeight: 'bold', color: '#10B981' },
+  sisterHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  pulseDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#EF4444', marginRight: 6 },
+  sisterPanelTitle: { fontSize: 15, fontWeight: 'bold', color: '#1F2937' },
   closeActiveText: { fontSize: 12, color: '#6B7280', fontWeight: '600' },
-  sisterInfoBox: {
-    backgroundColor: '#F0FDF4',
-    padding: 12,
-    borderRadius: 12,
+  requesterDoneBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ECFDF5',
     borderWidth: 1,
-    borderColor: '#DCFCE7',
-    marginVertical: 8,
+    borderColor: '#A7F3D0',
+    borderRadius: 10,
+    padding: 8,
+    marginBottom: 8,
   },
-  sisterNeedLabel: { fontSize: 10, color: '#166534', textTransform: 'uppercase', fontWeight: 'bold' },
-  sisterNeedValue: { fontSize: 16, fontWeight: 'bold', color: '#15803D', marginTop: 2 },
-  sisterDistValue: { fontSize: 12, color: '#166534', marginTop: 2 },
-  sisterActionsCol: { gap: 8, marginTop: 4 },
+  requesterDoneText: { fontSize: 12, color: '#065F46', fontWeight: 'bold', flex: 1 },
+  sisterInfoBox: { backgroundColor: '#F9FAFB', padding: 10, borderRadius: 10, marginBottom: 10 },
+  sisterNeedLabel: { fontSize: 11, color: '#6B7280' },
+  sisterNeedValue: { fontSize: 14, fontWeight: 'bold', color: '#D44D5C', marginTop: 2 },
+  sisterDistValue: { fontSize: 11, color: '#4B5563', marginTop: 4 },
+  sisterActionsCol: { marginTop: 4 },
   chatActionBtn: {
     backgroundColor: '#D44D5C',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 13,
+    paddingVertical: 12,
     borderRadius: 12,
+    marginBottom: 8,
   },
   chatActionText: { color: 'white', fontWeight: 'bold', fontSize: 14 },
   completeActionBtn: {
-    backgroundColor: '#F3F4F6',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1.5,
+    borderColor: '#10B981',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 11,
     borderRadius: 12,
+    marginBottom: 6,
   },
-  completeActionText: { color: '#374151', fontWeight: '600', fontSize: 13 },
+  completeActionBtnActive: {
+    backgroundColor: '#10B981',
+    borderColor: '#059669',
+  },
+  completeActionText: { color: '#065F46', fontWeight: 'bold', fontSize: 13 },
+  cancelAssistBtn: { alignItems: 'center', paddingVertical: 6 },
+  cancelAssistText: { color: '#9CA3AF', fontSize: 11, textDecorationLine: 'underline' },
 });

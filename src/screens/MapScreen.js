@@ -1,10 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Platform } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, Platform, ActivityIndicator } from 'react-native';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { getDistanceInKm } from '../utils/distance';
-import { listenToPendingRequests, acceptRequest } from '../services/requestService';
+import {
+  listenToPendingRequests,
+  acceptRequest,
+  listenToRequest,
+  markHelperCompleted,
+  cancelRequest,
+  deleteRequestSession,
+} from '../services/requestService';
 import { auth } from '../services/firebase';
+import { addKindnessPoints } from '../utils/rewardsStorage';
 import WebMapFallback from '../components/WebMapFallback';
 
 // Only import react-native-maps on native platforms — it has no web support.
@@ -21,6 +29,8 @@ export default function MapScreen({ navigation }) {
   const [nearbyRequests, setNearbyRequests] = useState([]);
   const [accepting, setAccepting] = useState(null);
   const [activeSister, setActiveSister] = useState(null);
+  const [delivering, setDelivering] = useState(false);
+  const isFinalizingRef = useRef(false);
 
   // Acquire device location
   useEffect(() => {
@@ -68,10 +78,45 @@ export default function MapScreen({ navigation }) {
     return () => unsubscribe();
   }, [userLoc]);
 
+  // Real-time listener for the active assisted sister
+  useEffect(() => {
+    if (!activeSister?.id) return;
+    isFinalizingRef.current = false;
+
+    const unsubscribe = listenToRequest(activeSister.id, async (req) => {
+      if (isFinalizingRef.current) return;
+
+      if (!req) {
+        // Document deleted / purged
+        Alert.alert('Notice', 'The sister received help or the session was ended.');
+        setActiveSister(null);
+        return;
+      }
+
+      if (req.status === 'cancelled') {
+        Alert.alert('Notice', 'The sister cancelled this request or found another helper.');
+        setActiveSister(null);
+        return;
+      }
+
+      // Check if both completed
+      if (req.status === 'completed' || (req.requesterCompleted && req.helperCompleted)) {
+        isFinalizingRef.current = true;
+        await addKindnessPoints(50);
+        await deleteRequestSession(activeSister.id);
+        setActiveSister(null);
+        navigation.navigate('HelperCompletion');
+        return;
+      }
+
+      // Update active sister with latest info (e.g. requesterCompleted flag)
+      setActiveSister((prev) => (prev ? { ...prev, ...req } : null));
+    });
+
+    return () => unsubscribe();
+  }, [activeSister?.id, navigation]);
+
   // When helper clicks Assist Sister:
-  // 1. Accept request in Firestore
-  // 2. Focus map on sister's location FIRST
-  // 3. Show chat option in helper panel
   const handleAssist = async (item) => {
     if (accepting) return;
     setAccepting(item.id);
@@ -84,6 +129,57 @@ export default function MapScreen({ navigation }) {
     } finally {
       setAccepting(null);
     }
+  };
+
+  // Helper marks delivered
+  const handleMarkDelivered = async () => {
+    if (!activeSister?.id || delivering || isFinalizingRef.current) return;
+    setDelivering(true);
+    try {
+      const { bothCompleted } = await markHelperCompleted(activeSister.id);
+      if (bothCompleted || activeSister.requesterCompleted) {
+        isFinalizingRef.current = true;
+        await addKindnessPoints(50);
+        await deleteRequestSession(activeSister.id);
+        setActiveSister(null);
+        navigation.navigate('HelperCompletion');
+      } else {
+        Alert.alert(
+          'Marked as Delivered!',
+          'Great job! Once the sister confirms "Help Received", your 50 Kindness Points will be awarded.'
+        );
+      }
+    } catch (err) {
+      console.warn('handleMarkDelivered error:', err.message);
+      Alert.alert('Notice', 'Could not record delivery. Please try again.');
+    } finally {
+      setDelivering(false);
+    }
+  };
+
+  // Helper cancels assistance
+  const handleCancelAssistance = () => {
+    if (!activeSister?.id) return;
+    Alert.alert(
+      'Cancel Assistance?',
+      'Are you unable to assist? This will return the request to the map so another nearby sister can help.',
+      [
+        { text: 'Keep Assisting', style: 'cancel' },
+        {
+          text: 'Yes, Cancel',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await cancelRequest(activeSister.id, 'helper');
+              setActiveSister(null);
+            } catch (e) {
+              console.warn('Cancel error:', e);
+              setActiveSister(null);
+            }
+          },
+        },
+      ]
+    );
   };
 
   const renderMap = () => {
@@ -154,6 +250,16 @@ export default function MapScreen({ navigation }) {
               </TouchableOpacity>
             </View>
 
+            {/* If sister has confirmed help received, highlight notice */}
+            {activeSister.requesterCompleted && (
+              <View style={styles.requesterDoneBanner}>
+                <Ionicons name="checkmark-circle" size={16} color="#065F46" style={{ marginRight: 6 }} />
+                <Text style={styles.requesterDoneText}>
+                  Sister confirmed help received! Tap below to finish & claim 50 points.
+                </Text>
+              </View>
+            )}
+
             <View style={styles.sisterInfoBox}>
               <Text style={styles.sisterNeedLabel}>Emergency Need:</Text>
               <Text style={styles.sisterNeedValue}>{activeSister.type}</Text>
@@ -179,13 +285,29 @@ export default function MapScreen({ navigation }) {
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={styles.completeActionBtn}
-                onPress={() => navigation.navigate('HelperCompletion')}
+                style={[
+                  styles.completeActionBtn,
+                  activeSister.requesterCompleted && styles.completeActionBtnActive,
+                ]}
+                onPress={handleMarkDelivered}
+                disabled={delivering}
               >
-                <Ionicons name="checkmark-done" size={18} color="white" style={{ marginRight: 6 }} />
-                <Text style={styles.completeActionText}>Delivered</Text>
+                {delivering ? (
+                  <ActivityIndicator size="small" color="white" />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark-done" size={18} color="white" style={{ marginRight: 6 }} />
+                    <Text style={styles.completeActionText}>
+                      {activeSister.requesterCompleted ? 'Finish & Claim' : 'Delivered'}
+                    </Text>
+                  </>
+                )}
               </TouchableOpacity>
             </View>
+
+            <TouchableOpacity style={styles.cancelAssistBtn} onPress={handleCancelAssistance}>
+              <Text style={styles.cancelAssistText}>Can't Assist? Cancel</Text>
+            </TouchableOpacity>
           </View>
         ) : (
           <>
@@ -209,11 +331,10 @@ export default function MapScreen({ navigation }) {
                   <TouchableOpacity
                     style={[styles.assistBtn, accepting === item.id && { opacity: 0.6 }]}
                     onPress={() => handleAssist(item)}
-                    disabled={!!accepting}
+                    disabled={accepting === item.id}
                   >
-                    <Text style={styles.assistText}>
-                      {accepting === item.id ? 'Connecting...' : 'Assist Sister'}
-                    </Text>
+                    <Ionicons name="hand-right" size={16} color="white" style={{ marginRight: 4 }} />
+                    <Text style={styles.assistBtnText}>Assist Sister</Text>
                   </TouchableOpacity>
                 </View>
               )}
@@ -227,67 +348,88 @@ export default function MapScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FAF9F6' },
-  map: { flex: 0.58 },
-  loadingBox: { flex: 0.58, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F3F4F6' },
+  map: { flex: 1 },
+  loadingBox: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   sheet: {
-    flex: 0.42,
+    position: 'absolute',
+    bottom: 90,
+    left: 15,
+    right: 15,
     backgroundColor: 'white',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 20,
-    elevation: 10,
+    borderRadius: 20,
+    padding: 18,
+    maxHeight: 280,
+    elevation: 6,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
   },
   sheetTitle: { fontSize: 16, fontWeight: 'bold', color: '#1F2937', marginBottom: 12 },
-  emptyText: { color: '#888', fontStyle: 'italic', marginTop: 10 },
+  emptyText: { color: '#6B7280', fontSize: 13, textAlign: 'center', marginVertical: 20 },
   requestCard: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 14,
-    backgroundColor: '#FFF5F7',
-    borderRadius: 14,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#FED7AA',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
   },
-  reqType: { fontSize: 15, fontWeight: '600', color: '#D44D5C' },
-  reqDist: { fontSize: 12, color: '#666', marginTop: 2 },
-  assistBtn: { backgroundColor: '#10B981', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20 },
-  assistText: { color: 'white', fontWeight: '600', fontSize: 13 },
-
-  // Active Sister Helping Panel
-  sisterPanel: { flex: 1, justifyContent: 'space-between' },
-  sisterHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  pulseDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#10B981', marginRight: 8 },
-  sisterPanelTitle: { fontSize: 16, fontWeight: 'bold', color: '#10B981' },
-  closeActiveText: { fontSize: 13, color: '#6B7280', fontWeight: '600' },
-  sisterInfoBox: { backgroundColor: '#F0FDF4', padding: 14, borderRadius: 14, borderWidth: 1, borderColor: '#DCFCE7', marginVertical: 6 },
-  sisterNeedLabel: { fontSize: 11, color: '#166534', textTransform: 'uppercase', fontWeight: 'bold' },
-  sisterNeedValue: { fontSize: 18, fontWeight: 'bold', color: '#15803D', marginTop: 2 },
-  sisterDistValue: { fontSize: 13, color: '#166534', marginTop: 4 },
-  sisterActionsRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 },
+  reqType: { fontSize: 15, fontWeight: 'bold', color: '#D44D5C' },
+  reqDist: { fontSize: 12, color: '#6B7280', marginTop: 2 },
+  assistBtn: {
+    backgroundColor: '#D44D5C',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+  },
+  assistBtnText: { color: 'white', fontWeight: 'bold', fontSize: 12 },
+  sisterPanel: { padding: 4 },
+  sisterHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  pulseDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#EF4444', marginRight: 8 },
+  sisterPanelTitle: { fontSize: 16, fontWeight: 'bold', color: '#1F2937' },
+  closeActiveText: { fontSize: 12, color: '#6B7280' },
+  requesterDoneBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    borderRadius: 8,
+    padding: 6,
+    marginBottom: 6,
+  },
+  requesterDoneText: { fontSize: 11, color: '#065F46', fontWeight: 'bold', flex: 1 },
+  sisterInfoBox: { backgroundColor: '#F9FAFB', padding: 8, borderRadius: 8, marginVertical: 6 },
+  sisterNeedLabel: { fontSize: 11, color: '#6B7280' },
+  sisterNeedValue: { fontSize: 14, fontWeight: 'bold', color: '#D44D5C' },
+  sisterDistValue: { fontSize: 11, color: '#4B5563', marginTop: 2 },
+  sisterActionsRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
   chatActionBtn: {
-    flex: 0.65,
+    flex: 0.58,
     backgroundColor: '#D44D5C',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 14,
-    borderRadius: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
   },
-  chatActionText: { color: 'white', fontWeight: 'bold', fontSize: 14 },
+  chatActionText: { color: 'white', fontWeight: 'bold', fontSize: 13 },
   completeActionBtn: {
-    flex: 0.32,
+    flex: 0.38,
     backgroundColor: '#10B981',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 14,
-    borderRadius: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
   },
-  completeActionText: { color: 'white', fontWeight: 'bold', fontSize: 13 },
+  completeActionBtnActive: {
+    backgroundColor: '#059669',
+  },
+  completeActionText: { color: 'white', fontWeight: 'bold', fontSize: 12 },
+  cancelAssistBtn: { alignItems: 'center', paddingVertical: 4, marginTop: 4 },
+  cancelAssistText: { color: '#9CA3AF', fontSize: 11, textDecorationLine: 'underline' },
 });

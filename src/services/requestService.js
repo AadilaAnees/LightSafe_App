@@ -13,6 +13,7 @@ import {
   collection,
   doc,
   addDoc,
+  getDoc,
   updateDoc,
   deleteDoc,
   onSnapshot,
@@ -40,6 +41,8 @@ export async function createRequest(type, coords) {
     status: "pending",
     requesterId: auth.currentUser?.uid ?? "anon",
     requesterName: "Sister in Need",
+    requesterCompleted: false,
+    helperCompleted: false,
     createdAt: serverTimestamp(),
     location: {
       latitude: coords?.latitude,
@@ -95,7 +98,85 @@ export async function acceptRequest(requestId) {
     status: "accepted",
     helperId,
     helperName: "Sister Volunteer",
+    helperCompleted: false,
   });
+}
+
+// ---------------------------------------------------------------------------
+// TWO-SIDED COMPLETION & CANCELLATION
+// ---------------------------------------------------------------------------
+
+/**
+ * Marks that the requester has received help.
+ * If helper has already completed, marks entire request as completed.
+ * @param {string} requestId
+ * @returns {Promise<{ bothCompleted: boolean }>}
+ */
+export async function markRequesterCompleted(requestId) {
+  const docRef = doc(db, "requests", requestId);
+  const snap = await getDoc(docRef);
+  if (!snap.exists()) return { bothCompleted: false };
+
+  const data = snap.data();
+  const bothCompleted = !!data.helperCompleted;
+
+  await updateDoc(docRef, {
+    requesterCompleted: true,
+    ...(bothCompleted ? { status: "completed" } : {}),
+  });
+
+  return { bothCompleted };
+}
+
+/**
+ * Marks that the helper has completed assistance / delivery.
+ * If requester has already confirmed help received, marks request as completed.
+ * @param {string} requestId
+ * @returns {Promise<{ bothCompleted: boolean }>}
+ */
+export async function markHelperCompleted(requestId) {
+  const docRef = doc(db, "requests", requestId);
+  const snap = await getDoc(docRef);
+  if (!snap.exists()) return { bothCompleted: false };
+
+  const data = snap.data();
+  const bothCompleted = !!data.requesterCompleted;
+
+  await updateDoc(docRef, {
+    helperCompleted: true,
+    ...(bothCompleted ? { status: "completed" } : {}),
+  });
+
+  return { bothCompleted };
+}
+
+/**
+ * Cancels a request by either requester or helper.
+ * If helper cancels, frees request back to pending so other nearby sisters can help.
+ * If requester cancels, marks request as cancelled.
+ * @param {string} requestId
+ * @param {"requester" | "helper"} cancelledBy
+ * @returns {Promise<void>}
+ */
+export async function cancelRequest(requestId, cancelledBy) {
+  try {
+    const docRef = doc(db, "requests", requestId);
+    if (cancelledBy === "helper") {
+      await updateDoc(docRef, {
+        status: "pending",
+        helperId: null,
+        helperName: null,
+        helperCompleted: false,
+      });
+    } else {
+      await updateDoc(docRef, {
+        status: "cancelled",
+        cancelledBy: "requester",
+      });
+    }
+  } catch (err) {
+    console.warn("cancelRequest notice:", err.message);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +224,7 @@ export function listenToMessages(requestId, callback) {
  *   1. Deletes all documents in the messages subcollection.
  *   2. Deletes the parent request document.
  *
- * Called by either party when the session ends (Help Received / Complete).
+ * Called when both parties have completed or session is permanently dismissed.
  * @param {string} requestId
  * @returns {Promise<void>}
  */

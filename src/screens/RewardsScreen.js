@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,10 +10,19 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BarChart } from 'react-native-chart-kit';
+import { getKindnessPoints } from '../utils/rewardsStorage';
 
 export default function RewardsScreen({ navigation }) {
   const screenWidth = Dimensions.get('window').width - 40;
   const [claimedVoucher, setClaimedVoucher] = useState(null);
+  const [totalPoints, setTotalPoints] = useState(380);
+
+  useEffect(() => {
+    (async () => {
+      const pts = await getKindnessPoints();
+      setTotalPoints(pts);
+    })();
+  }, []);
 
   // Realistic monthly assistance score totals
   const chartData = {
@@ -40,8 +49,8 @@ export default function RewardsScreen({ navigation }) {
         {/* Main Score Banner */}
         <View style={styles.scoreBanner}>
           <Text style={styles.scoreLabel}>Total Kindness Score</Text>
-          <Text style={styles.scoreValue}>380 Points</Text>
-          <Text style={styles.scoreSub}>You have assisted 7 sisters in your community!</Text>
+          <Text style={styles.scoreValue}>{totalPoints} Points</Text>
+          <Text style={styles.scoreSub}>You have assisted {Math.max(7, Math.floor(totalPoints / 50))} sisters in your community!</Text>
         </View>
 
         {/* Monthly Chart */}
